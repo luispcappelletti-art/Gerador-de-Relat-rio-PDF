@@ -1,8 +1,6 @@
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import json, os, re, unicodedata
-from copy import deepcopy
-from datetime import datetime
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -120,22 +118,48 @@ def gerar_pdf(sections, template_path, output_path):
     styles = getSampleStyleSheet()
 
     styles.add(ParagraphStyle(name="Titulo",
-        fontSize=18, alignment=1, spaceAfter=10, textColor=colors.HexColor("#0E2A44")))
+        fontSize=18, alignment=1, spaceAfter=6, textColor=colors.HexColor("#0E2A44"), leading=22))
 
     styles.add(ParagraphStyle(name="Subtitulo",
-        fontSize=9, alignment=1, textColor=colors.grey, spaceAfter=15))
+        fontSize=9.5, alignment=1, textColor=colors.HexColor("#4F6473"), spaceAfter=14, leading=12))
+
+    styles.add(ParagraphStyle(
+        name="CabecalhoLabel",
+        fontSize=8.5,
+        alignment=1,
+        textColor=colors.HexColor("#6B7F90"),
+        leading=10
+    ))
 
     styles.add(ParagraphStyle(name="Secao",
-        fontSize=12, spaceBefore=12, spaceAfter=6, textColor=colors.HexColor("#123A5A")))
+        fontSize=12.5, spaceBefore=14, spaceAfter=7, textColor=colors.HexColor("#123A5A"), leading=15))
 
     styles.add(ParagraphStyle(name="Body",
-        fontSize=10.5, leading=15))
+        fontSize=10.5, leading=15, textColor=colors.HexColor("#1F2B37")))
 
     story = []
 
-    # TÍTULO
-    story.append(Paragraph("<b>RELATÓRIO DE ATENDIMENTO TÉCNICO</b>", styles["Titulo"]))
-    story.append(Paragraph("Documento técnico padronizado", styles["Subtitulo"]))
+    # CABEÇALHO
+    cabecalho = Table(
+        [
+            [Paragraph("<b>RELATÓRIO TÉCNICO DE ATENDIMENTO</b>", styles["Titulo"])],
+            [Paragraph("Registro técnico de análise, execução e validação do atendimento", styles["Subtitulo"])],
+            [Paragraph("Uso interno • Documento profissional", styles["CabecalhoLabel"])],
+        ],
+        colWidths=[15 * cm]
+    )
+    cabecalho.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F5F8FB")),
+        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#D1DCE6")),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(cabecalho)
+    story.append(Spacer(1, 12))
 
     # TABELA INFO
     info = sections.get("info", {})
@@ -160,13 +184,16 @@ def gerar_pdf(sections, template_path, output_path):
     if dados:
         tabela = Table(dados, colWidths=[5*cm, 10*cm])
         tabela.setStyle(TableStyle([
-            ("BACKGROUND", (0,0), (-1,-1), colors.white),
-            ("BOX", (0,0), (-1,-1), 1, colors.grey),
-            ("INNERGRID", (0,0), (-1,-1), 0.5, colors.lightgrey),
-            ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#ECEFF1")),
+            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#FCFDFE")),
+            ("BOX", (0,0), (-1,-1), 1, colors.HexColor("#C7D4DF")),
+            ("INNERGRID", (0,0), (-1,-1), 0.5, colors.HexColor("#DCE5EC")),
+            ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#E9F0F6")),
             ("FONTNAME", (0,0), (0,-1), "Helvetica-Bold"),
             ("LEFTPADDING", (0,0), (-1,-1), 8),
             ("RIGHTPADDING", (0,0), (-1,-1), 8),
+            ("TOPPADDING", (0,0), (-1,-1), 6),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ]))
         story.append(tabela)
         story.append(Spacer(1, 15))
@@ -177,7 +204,7 @@ def gerar_pdf(sections, template_path, output_path):
         story.extend(processar_lista(conteudo, styles))
 
     if sections.get("descricao"):
-        add_secao("1 – DESCRIÇÃO BREVE", sections["descricao"])
+        add_secao("1 – ESCOPO DO ATENDIMENTO", sections["descricao"])
 
     if sections.get("detalhamento"):
         add_secao("2 – DETALHAMENTO DO PROBLEMA", sections["detalhamento"])
@@ -196,10 +223,10 @@ def gerar_pdf(sections, template_path, output_path):
 
     # RODAPÉ COM NUMERAÇÃO
     def footer(canvas, doc):
-        canvas.setFont("Helvetica", 9)
-        canvas.drawRightString(20*cm, 1.5*cm, f"Página {doc.page}")
-        canvas.drawString(2*cm, 1.5*cm,
-            f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        canvas.setFont("Helvetica", 8.8)
+        canvas.setFillColor(colors.HexColor("#5B6E7D"))
+        canvas.drawString(2.5*cm, 1.4*cm, "Relatório técnico")
+        canvas.drawRightString(18.5*cm, 1.4*cm, f"Página {doc.page}")
 
     doc = SimpleDocTemplate(temp_pdf, pagesize=A4,
         leftMargin=2.5*cm, rightMargin=2.5*cm,
@@ -209,14 +236,15 @@ def gerar_pdf(sections, template_path, output_path):
 
     # TEMPLATE EM TODAS AS PÁGINAS
     if template_path and os.path.exists(template_path):
-        template = PdfReader(template_path)
-        content = PdfReader(temp_pdf)
+        template_reader = PdfReader(template_path)
+        content_reader = PdfReader(temp_pdf)
         writer = PdfWriter()
 
-        for i in range(len(content.pages)):
-            base = deepcopy(template.pages[0])
-            base.merge_page(content.pages[i])
-            writer.add_page(base)
+        template_base = template_reader.pages[0]
+        for page in content_reader.pages:
+            writer.add_page(template_base)
+            out_page = writer.pages[-1]
+            out_page.merge_page(page)
 
         with open(output_path, "wb") as f:
             writer.write(f)
