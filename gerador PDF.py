@@ -90,55 +90,67 @@ def parse_text(text):
 # =========================
 # LISTAS AUTOMÁTICAS
 # =========================
+def _linha_tem_topico(linha):
+    return bool(re.match(r"^(\d+[\.\)]|-|•|\u2022|°)\s*", linha.strip()))
+
+
+def _limpar_marcador_topico(linha):
+    return re.sub(r"^(\d+[\.\)]|-|•|\u2022|°)\s*", "", linha.strip())
+
+
+def _valor_info_preenchido(valor):
+    if valor is None:
+        return False
+    texto = str(valor).strip()
+    return bool(texto and texto != ".")
+
+
 def processar_lista(texto, styles):
     elementos = []
-    linhas = texto.split("\n")
+    linhas = [linha.strip() for linha in texto.split("\n") if linha.strip()]
+    if not linhas:
+        return [Spacer(1, 10)]
 
-    lista = []
+    tem_topicos_explicitos = any(_linha_tem_topico(linha) for linha in linhas)
+    itens = []
     item_atual = ""
 
-    def adicionar_item():
-        if item_atual.strip():
-            lista.append(
-                ListItem(
-                    Paragraph(item_atual.strip(), styles["Body"]),
-                    leftIndent=12,
-                    bulletText="°"
-                )
-            )
+    def adicionar_item(item):
+        texto_item = item.strip()
+        if texto_item:
+            itens.append(texto_item)
 
     for linha in linhas:
-        linha = linha.strip()
-
-        # NOVO ITEM
-        if re.match(r"^(\d+[\.\)]|-|•|\u2022|°)", linha):
+        if tem_topicos_explicitos and _linha_tem_topico(linha):
             if item_atual:
-                adicionar_item()
-                item_atual = ""
+                adicionar_item(item_atual)
+            item_atual = _limpar_marcador_topico(linha)
+            continue
 
-            linha_limpa = re.sub(r"^(\d+[\.\)]|-|•|\u2022|°)\s*", "", linha)
-            item_atual = linha_limpa
-
-        else:
-            # CONTINUAÇÃO DO ITEM
-            if item_atual:
-                # Se a linha anterior terminou com ponto final,
-                # inicia um novo item automaticamente.
+        if item_atual:
+            if tem_topicos_explicitos:
+                item_atual += " " + linha
+            else:
                 if item_atual.rstrip().endswith("."):
-                    adicionar_item()
+                    adicionar_item(item_atual)
                     item_atual = linha
                 else:
                     item_atual += " " + linha
-            else:
-                # Sem marcador explícito, considera como novo item da lista
-                if linha:
-                    item_atual = linha
+        else:
+            item_atual = _limpar_marcador_topico(linha) if tem_topicos_explicitos else linha
 
-    # último item
     if item_atual:
-        adicionar_item()
+        adicionar_item(item_atual)
 
-    if lista:
+    if itens:
+        lista = [
+            ListItem(
+                Paragraph(item, styles["Body"]),
+                leftIndent=12,
+                bulletText="°"
+            )
+            for item in itens
+        ]
         elementos.append(
             ListFlowable(
                 lista,
@@ -195,8 +207,9 @@ def gerar_pdf(sections, template_path, output_path, fotos=None):
     ]
 
     for label, key in campos:
-        if info.get(key):
-            dados.append([label, info[key]])
+        valor = info.get(key)
+        if _valor_info_preenchido(valor):
+            dados.append([label, str(valor).strip()])
 
     if dados:
         tabela = Table(dados, colWidths=[5*cm, 10*cm])
