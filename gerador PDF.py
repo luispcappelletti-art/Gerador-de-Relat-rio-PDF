@@ -89,21 +89,52 @@ def processar_lista(texto, styles):
     linhas = texto.split("\n")
 
     lista = []
+    item_atual = ""
+
+    def adicionar_item():
+        if item_atual.strip():
+            lista.append(
+                ListItem(
+                    Paragraph(item_atual.strip(), styles["Body"]),
+                    leftIndent=12
+                )
+            )
+
     for linha in linhas:
         linha = linha.strip()
 
-        if re.match(r"^(\d+[\.\)]|-|\u2022)", linha):
-            item = re.sub(r"^(\d+[\.\)]|-|\u2022)\s*", "", linha)
-            lista.append(ListItem(Paragraph(item, styles["Body"])))
+        # NOVO ITEM
+        if re.match(r"^(\d+[\.\)]|-|•|\u2022)", linha):
+            if item_atual:
+                adicionar_item()
+                item_atual = ""
+
+            linha_limpa = re.sub(r"^(\d+[\.\)]|-|•|\u2022)\s*", "", linha)
+            item_atual = linha_limpa
+
         else:
-            if lista:
-                elementos.append(ListFlowable(lista, bulletType='1'))
-                lista = []
-            if linha:
-                elementos.append(Paragraph(linha, styles["Body"]))
+            # CONTINUAÇÃO DO ITEM
+            if item_atual:
+                item_atual += " " + linha
+            else:
+                # TEXTO NORMAL (fora de lista)
+                if linha:
+                    elementos.append(Paragraph(linha, styles["Body"]))
+
+    # último item
+    if item_atual:
+        adicionar_item()
 
     if lista:
-        elementos.append(ListFlowable(lista, bulletType='1'))
+        elementos.append(
+            ListFlowable(
+                lista,
+                bulletType='bullet',
+                leftIndent=8,
+                bulletFontName="Helvetica",
+                bulletFontSize=9
+            )
+        )
 
     elementos.append(Spacer(1, 10))
     return elementos
