@@ -3,12 +3,15 @@ from tkinter import filedialog, messagebox
 import json
 import os
 import re
+import unicodedata
 
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from copy import deepcopy
+from datetime import datetime
 
 from pypdf import PdfReader, PdfWriter
 
@@ -34,38 +37,65 @@ def save_config(config):
 # PARSER
 # =========================
 def parse_text(text):
-    sections = {}
+    def normalize_label(value):
+        value = unicodedata.normalize("NFKD", value)
+        value = "".join(ch for ch in value if not unicodedata.combining(ch))
+        value = value.lower()
+        value = re.sub(r"\s+", " ", value).strip()
+        return value
 
-    patterns = {
-        "data": r"Data:\s*(.*)",
-        "inicio": r"Horário de início:\s*(.*)",
-        "fim": r"Horário de término:\s*(.*)",
-        "tempo_atendimento": r"Tempo do Atendimento:\s*(.*)",
-        "tempo_espera": r"Tempo em espera:\s*(.*)"
+    info_aliases = {
+        "cliente": "cliente",
+        "equipamento": "equipamento",
+        "fonte": "fonte",
+        "cnc": "cnc",
+        "thc": "thc",
+        "fabricante": "fabricante",
+        "contato cliente": "contato_cliente",
+        "data": "data",
+        "tecnico": "tecnico",
+        "técnico": "tecnico",
+        "acompanhamento remoto": "acompanhamento_remoto",
+        "horario de inicio": "inicio",
+        "horario de termino": "fim",
+        "tempo do atendimento": "tempo_atendimento",
+        "tempo em espera": "tempo_espera",
     }
 
-    for key, pattern in patterns.items():
-        match = re.search(pattern, text)
-        sections[key] = match.group(1).strip() if match else ""
+    section_aliases = {
+        "descricao breve do problema": "descricao",
+        "descricao breve": "descricao",
+        "detalhamento completo do problema": "detalhamento",
+        "detalhamento do problema": "detalhamento",
+        "detalhamento": "detalhamento",
+        "diagnostico": "diagnostico",
+        "acoes corretivas": "acoes",
+        "acoes corretivas aplicadas": "acoes",
+        "resultado": "resultado",
+        "estado final do sistema": "estado",
+        "estado final": "estado",
+    }
+
+    sections = {"info": {}}
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or ":" not in line:
+            continue
+        raw_key, raw_value = line.split(":", 1)
+        key = normalize_label(raw_key)
+        if key in info_aliases:
+            sections["info"][info_aliases[key]] = raw_value.strip()
 
     split_sections = re.split(r"\n\s*(\d+\s*[–-]\s*.+)", text)
 
     for i in range(1, len(split_sections), 2):
-        title = split_sections[i].strip()
-        content = split_sections[i+1].strip()
-
-        if "Descrição breve" in title:
-            sections["descricao"] = content
-        elif "Detalhamento" in title:
-            sections["detalhamento"] = content
-        elif "Diagnóstico" in title:
-            sections["diagnostico"] = content
-        elif "Ações corretivas" in title:
-            sections["acoes"] = content
-        elif "Resultado" in title:
-            sections["resultado"] = content
-        elif "Estado final" in title:
-            sections["estado"] = content
+        raw_title = split_sections[i].strip()
+        content = split_sections[i + 1].strip()
+        clean_title = re.sub(r"^\d+\s*[–-]\s*", "", raw_title)
+        section_key = section_aliases.get(normalize_label(clean_title))
+        if section_key:
+            sections[section_key] = content
 
     return sections
 
@@ -78,15 +108,37 @@ def gerar_pdf(sections, template_path, output_path):
 
     styles = getSampleStyleSheet()
 
-    # Estilos personalizados
-    styles["Heading1"].fontSize = 16
-    styles["Heading1"].spaceAfter = 14
-
-    styles["Heading2"].fontSize = 13
-    styles["Heading2"].spaceAfter = 10
-
-    styles["Normal"].fontSize = 10
-    styles["Normal"].leading = 14
+    styles.add(ParagraphStyle(
+        name="ReportTitle",
+        parent=styles["Heading1"],
+        fontSize=20,
+        textColor=colors.HexColor("#0E2A44"),
+        alignment=1,
+        spaceAfter=6,
+    ))
+    styles.add(ParagraphStyle(
+        name="ReportSubtitle",
+        parent=styles["Normal"],
+        fontSize=10,
+        textColor=colors.HexColor("#4B647A"),
+        alignment=1,
+        spaceAfter=18,
+    ))
+    styles.add(ParagraphStyle(
+        name="SectionTitle",
+        parent=styles["Heading2"],
+        fontSize=13,
+        textColor=colors.HexColor("#123A5A"),
+        spaceBefore=12,
+        spaceAfter=8,
+    ))
+    styles.add(ParagraphStyle(
+        name="SectionBody",
+        parent=styles["BodyText"],
+        fontSize=10.5,
+        leading=16,
+        textColor=colors.HexColor("#1F2F3D"),
+    ))
 
     story = []
 
@@ -94,30 +146,63 @@ def gerar_pdf(sections, template_path, output_path):
         story.append(Spacer(1, 8))
 
     def titulo_principal(texto):
-        story.append(Paragraph(f"<b>{texto}</b>", styles["Heading1"]))
+        story.append(Paragraph(f"<b>{texto}</b>", styles["ReportTitle"]))
         linha()
 
     def titulo_secao(texto):
-        story.append(Paragraph(f"<b>{texto}</b>", styles["Heading2"]))
+        story.append(Paragraph(f"<b>{texto}</b>", styles["SectionTitle"]))
         linha()
 
     def texto(texto):
-        story.append(Paragraph(texto.replace("\n", "<br/>"), styles["Normal"]))
+        story.append(Paragraph(texto.replace("\n", "<br/>"), styles["SectionBody"]))
         story.append(Spacer(1, 12))
 
     # =========================
     # CONTEÚDO
     # =========================
 
-    titulo_principal("RELATÓRIO TÉCNICO DE ATENDIMENTO")
+    titulo_principal("RELATÓRIO DE ATENDIMENTO TÉCNICO")
+    story.append(Paragraph("Documento técnico padronizado", styles["ReportSubtitle"]))
 
-    texto(f"""
-    <b>Data:</b> {sections.get('data', '')}<br/>
-    <b>Início:</b> {sections.get('inicio', '')}<br/>
-    <b>Fim:</b> {sections.get('fim', '')}<br/>
-    <b>Tempo Atendimento:</b> {sections.get('tempo_atendimento', '')}<br/>
-    <b>Tempo Espera:</b> {sections.get('tempo_espera', '')}
-    """)
+    info = sections.get("info", {})
+    info_rows = []
+    table_map = [
+        ("Cliente", info.get("cliente", "-")),
+        ("Equipamento", info.get("equipamento", "-")),
+        ("Fonte", info.get("fonte", "-")),
+        ("CNC", info.get("cnc", "-")),
+        ("THC", info.get("thc", "-")),
+        ("Fabricante", info.get("fabricante", "-")),
+        ("Contato Cliente", info.get("contato_cliente", "-")),
+        ("Data", info.get("data", "-")),
+        ("Técnico", info.get("tecnico", "-")),
+        ("Acompanhamento remoto", info.get("acompanhamento_remoto", "-")),
+        ("Horário de início", info.get("inicio", "-")),
+        ("Horário de término", info.get("fim", "-")),
+        ("Tempo do Atendimento", info.get("tempo_atendimento", "-")),
+        ("Tempo em espera", info.get("tempo_espera", "-")),
+    ]
+
+    for label, value in table_map:
+        if value and value != "-":
+            info_rows.append([f"<b>{label}</b>", value])
+
+    if info_rows:
+        info_table = Table(info_rows, colWidths=[5.5 * cm, 9.5 * cm])
+        info_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F5F8FB")),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#C8D2DD")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D5DEE7")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#243848")),
+            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        story.append(info_table)
+        story.append(Spacer(1, 14))
 
     if sections.get("descricao"):
         titulo_secao("1 – DESCRIÇÃO BREVE")
@@ -142,6 +227,12 @@ def gerar_pdf(sections, template_path, output_path):
     if sections.get("estado"):
         titulo_secao("6 – ESTADO FINAL DO SISTEMA")
         texto(sections["estado"])
+
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(
+        f"<font size='9' color='#4B647A'>Relatório gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}</font>",
+        styles["Normal"]
+    ))
 
     doc = SimpleDocTemplate(
         temp_pdf,
