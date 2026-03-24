@@ -41,8 +41,13 @@ def parse_text(text):
     sections = {"info": {}}
 
     aliases = {
+        "equipamento": "equipamento",
+        "fonte": "fonte",
         "cliente": "cliente",
         "cnc": "cnc",
+        "thc": "thc",
+        "fabricante": "fabricante",
+        "contato cliente": "contato_cliente",
         "data": "data",
         "tecnico": "tecnico",
         "técnico": "tecnico",
@@ -106,12 +111,12 @@ def processar_lista(texto, styles):
         linha = linha.strip()
 
         # NOVO ITEM
-        if re.match(r"^(\d+[\.\)]|-|•|\u2022)", linha):
+        if re.match(r"^(\d+[\.\)]|-|•|\u2022|°)", linha):
             if item_atual:
                 adicionar_item()
                 item_atual = ""
 
-            linha_limpa = re.sub(r"^(\d+[\.\)]|-|•|\u2022)\s*", "", linha)
+            linha_limpa = re.sub(r"^(\d+[\.\)]|-|•|\u2022|°)\s*", "", linha)
             item_atual = linha_limpa
 
         else:
@@ -119,9 +124,9 @@ def processar_lista(texto, styles):
             if item_atual:
                 item_atual += " " + linha
             else:
-                # TEXTO NORMAL (fora de lista)
+                # Sem marcador explícito, considera como novo item da lista
                 if linha:
-                    elementos.append(Paragraph(linha, styles["Body"]))
+                    item_atual = linha
 
     # último item
     if item_atual:
@@ -167,11 +172,16 @@ def gerar_pdf(sections, template_path, output_path, fotos=None):
     dados = []
 
     campos = [
+        ("Equipamento", "equipamento"),
+        ("Fonte", "fonte"),
         ("Cliente", "cliente"),
         ("CNC", "cnc"),
+        ("THC", "thc"),
+        ("Fabricante", "fabricante"),
+        ("Contato Cliente", "contato_cliente"),
         ("Data", "data"),
         ("Técnico", "tecnico"),
-        ("Acompanhamento", "acompanhamento"),
+        ("Acompanhamento remoto", "acompanhamento"),
         ("Início", "inicio"),
         ("Fim", "fim"),
         ("Tempo Atendimento", "tempo_atendimento"),
@@ -373,9 +383,10 @@ class App(ctk.CTk):
                 for idx, arquivo in enumerate(arquivos, start=1):
                     titulo = ""
                     if usar_titulos:
+                        nome_arquivo = os.path.basename(arquivo)
                         titulo = simpledialog.askstring(
                             "Título da foto",
-                            f"Digite o título da foto {idx}:",
+                            f"Foto {idx}: {nome_arquivo}\nDigite o título desta foto:",
                             parent=self,
                         ) or ""
                     fotos.append({"path": arquivo, "title": titulo.strip()})
