@@ -122,7 +122,13 @@ def processar_lista(texto, styles):
         else:
             # CONTINUAÇÃO DO ITEM
             if item_atual:
-                item_atual += " " + linha
+                # Se a linha anterior terminou com ponto final,
+                # inicia um novo item automaticamente.
+                if item_atual.rstrip().endswith("."):
+                    adicionar_item()
+                    item_atual = linha
+                else:
+                    item_atual += " " + linha
             else:
                 # Sem marcador explícito, considera como novo item da lista
                 if linha:
@@ -237,32 +243,38 @@ def gerar_pdf(sections, template_path, output_path, fotos=None):
         story.append(Paragraph("<b>ANEXOS FOTOGRÁFICOS</b>", styles["Secao"]))
         story.append(Spacer(1, 6))
 
-        largura_max = 14.5 * cm
-        altura_max = 11 * cm
+        largura_util = A4[0] - (5 * cm)
+        largura_max = largura_util - (1 * cm)
+        altura_max = 8.1 * cm
 
-        for idx, foto in enumerate(fotos, start=1):
-            caminho = foto.get("path")
-            titulo = foto.get("title") or f"Foto {idx}"
-
-            story.append(Paragraph(f"<b>{idx}. {titulo}</b>", styles["Body"]))
-            story.append(Spacer(1, 4))
-
-            try:
-                img_reader = ImageReader(caminho)
-                largura_original, altura_original = img_reader.getSize()
-                escala = min(largura_max / largura_original, altura_max / altura_original)
-                largura = largura_original * escala
-                altura = altura_original * escala
-
-                imagem = Image(caminho, width=largura, height=altura)
-                imagem.hAlign = "CENTER"
-                story.append(imagem)
-            except Exception:
-                story.append(Paragraph("Não foi possível carregar esta imagem.", styles["Body"]))
-
-            story.append(Spacer(1, 12))
-            if idx != len(fotos):
+        for bloco in range(0, len(fotos), 2):
+            fotos_bloco = fotos[bloco:bloco + 2]
+            if bloco > 0:
                 story.append(PageBreak())
+
+            for posicao, foto in enumerate(fotos_bloco, start=1):
+                idx = bloco + posicao
+                caminho = foto.get("path")
+                titulo = foto.get("title") or f"Foto {idx}"
+
+                story.append(Paragraph(f"<b>{idx}. {titulo}</b>", styles["Body"]))
+                story.append(Spacer(1, 4))
+
+                try:
+                    img_reader = ImageReader(caminho)
+                    largura_original, altura_original = img_reader.getSize()
+                    escala = min(largura_max / largura_original, altura_max / altura_original)
+                    largura = largura_original * escala
+                    altura = altura_original * escala
+
+                    imagem = Image(caminho, width=largura, height=altura)
+                    imagem.hAlign = "CENTER"
+                    story.append(imagem)
+                except Exception:
+                    story.append(Paragraph("Não foi possível carregar esta imagem.", styles["Body"]))
+
+                if posicao != len(fotos_bloco):
+                    story.append(Spacer(1, 14))
 
     # CABEÇALHO + RODAPÉ COM NUMERAÇÃO
     def page_chrome(canvas, doc):
