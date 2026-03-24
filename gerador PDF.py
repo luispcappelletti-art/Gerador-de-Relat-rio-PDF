@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 import json, os, re, unicodedata
 
 from reportlab.lib.pagesizes import A4
@@ -7,6 +7,7 @@ from reportlab.lib import colors
 from reportlab.platypus import *
 from reportlab.lib.styles import *
 from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
 
 from pypdf import PdfReader, PdfWriter
 
@@ -96,7 +97,8 @@ def processar_lista(texto, styles):
             lista.append(
                 ListItem(
                     Paragraph(item_atual.strip(), styles["Body"]),
-                    leftIndent=12
+                    leftIndent=12,
+                    bulletText="°"
                 )
             )
 
@@ -132,7 +134,7 @@ def processar_lista(texto, styles):
                 bulletType='bullet',
                 leftIndent=8,
                 bulletFontName="Helvetica",
-                bulletFontSize=9
+                bulletFontSize=10
             )
         )
 
@@ -143,24 +145,14 @@ def processar_lista(texto, styles):
 # =========================
 # PDF
 # =========================
-def gerar_pdf(sections, template_path, output_path):
+def gerar_pdf(sections, template_path, output_path, fotos=None):
     temp_pdf = "temp.pdf"
+    fotos = fotos or []
 
     styles = getSampleStyleSheet()
 
     styles.add(ParagraphStyle(name="Titulo",
         fontSize=18, alignment=1, spaceAfter=6, textColor=colors.HexColor("#0E2A44"), leading=22))
-
-    styles.add(ParagraphStyle(name="Subtitulo",
-        fontSize=9.5, alignment=1, textColor=colors.HexColor("#4F6473"), spaceAfter=14, leading=12))
-
-    styles.add(ParagraphStyle(
-        name="CabecalhoLabel",
-        fontSize=8.5,
-        alignment=1,
-        textColor=colors.HexColor("#6B7F90"),
-        leading=10
-    ))
 
     styles.add(ParagraphStyle(name="Secao",
         fontSize=12.5, spaceBefore=14, spaceAfter=7, textColor=colors.HexColor("#123A5A"), leading=15))
@@ -169,28 +161,6 @@ def gerar_pdf(sections, template_path, output_path):
         fontSize=10.5, leading=15, textColor=colors.HexColor("#1F2B37")))
 
     story = []
-
-    # CABEÇALHO
-    cabecalho = Table(
-        [
-            [Paragraph("<b>RELATÓRIO TÉCNICO DE ATENDIMENTO</b>", styles["Titulo"])],
-            [Paragraph("Registro técnico de análise, execução e validação do atendimento", styles["Subtitulo"])],
-            [Paragraph("Uso interno • Documento profissional", styles["CabecalhoLabel"])],
-        ],
-        colWidths=[15 * cm]
-    )
-    cabecalho.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F5F8FB")),
-        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#D1DCE6")),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-        ("LEFTPADDING", (0, 0), (-1, -1), 14),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-    ]))
-    story.append(cabecalho)
-    story.append(Spacer(1, 12))
 
     # TABELA INFO
     info = sections.get("info", {})
@@ -252,18 +222,60 @@ def gerar_pdf(sections, template_path, output_path):
     if sections.get("estado"):
         add_secao("6 – ESTADO FINAL", sections["estado"])
 
-    # RODAPÉ COM NUMERAÇÃO
-    def footer(canvas, doc):
+    if fotos:
+        story.append(PageBreak())
+        story.append(Paragraph("<b>ANEXOS FOTOGRÁFICOS</b>", styles["Secao"]))
+        story.append(Spacer(1, 6))
+
+        largura_max = 14.5 * cm
+        altura_max = 11 * cm
+
+        for idx, foto in enumerate(fotos, start=1):
+            caminho = foto.get("path")
+            titulo = foto.get("title") or f"Foto {idx}"
+
+            story.append(Paragraph(f"<b>{idx}. {titulo}</b>", styles["Body"]))
+            story.append(Spacer(1, 4))
+
+            try:
+                img_reader = ImageReader(caminho)
+                largura_original, altura_original = img_reader.getSize()
+                escala = min(largura_max / largura_original, altura_max / altura_original)
+                largura = largura_original * escala
+                altura = altura_original * escala
+
+                imagem = Image(caminho, width=largura, height=altura)
+                imagem.hAlign = "CENTER"
+                story.append(imagem)
+            except Exception:
+                story.append(Paragraph("Não foi possível carregar esta imagem.", styles["Body"]))
+
+            story.append(Spacer(1, 12))
+            if idx != len(fotos):
+                story.append(PageBreak())
+
+    # CABEÇALHO + RODAPÉ COM NUMERAÇÃO
+    def page_chrome(canvas, doc):
+        canvas.saveState()
+        canvas.setFillColor(colors.HexColor("#F5F8FB"))
+        canvas.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=0, fill=1)
+        canvas.setStrokeColor(colors.HexColor("#D1DCE6"))
+        canvas.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=1, fill=0)
+        canvas.setFont("Helvetica-Bold", 12)
+        canvas.setFillColor(colors.HexColor("#0E2A44"))
+        canvas.drawCentredString(A4[0] / 2, A4[1] - 1.95 * cm, "RELATÓRIO TÉCNICO DE ATENDIMENTO")
+
         canvas.setFont("Helvetica", 8.8)
         canvas.setFillColor(colors.HexColor("#5B6E7D"))
         canvas.drawString(2.5*cm, 1.4*cm, "Relatório técnico")
         canvas.drawRightString(18.5*cm, 1.4*cm, f"Página {doc.page}")
+        canvas.restoreState()
 
     doc = SimpleDocTemplate(temp_pdf, pagesize=A4,
         leftMargin=2.5*cm, rightMargin=2.5*cm,
-        topMargin=3*cm, bottomMargin=2.5*cm)
+        topMargin=3.4*cm, bottomMargin=2.5*cm)
 
-    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    doc.build(story, onFirstPage=page_chrome, onLaterPages=page_chrome)
 
     # TEMPLATE EM TODAS AS PÁGINAS
     if template_path and os.path.exists(template_path):
@@ -343,8 +355,33 @@ class App(ctk.CTk):
         if not save:
             return
 
+        fotos = []
+        anexar_fotos = messagebox.askyesno("Anexar fotos", "Deseja anexar fotos no PDF?")
+        if anexar_fotos:
+            arquivos = filedialog.askopenfilenames(
+                title="Selecione uma ou mais fotos",
+                filetypes=[
+                    ("Imagens", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"),
+                    ("Todos os arquivos", "*.*"),
+                ],
+            )
+            if arquivos:
+                usar_titulos = messagebox.askyesno(
+                    "Título das fotos",
+                    "Deseja definir um título para cada foto?",
+                )
+                for idx, arquivo in enumerate(arquivos, start=1):
+                    titulo = ""
+                    if usar_titulos:
+                        titulo = simpledialog.askstring(
+                            "Título da foto",
+                            f"Digite o título da foto {idx}:",
+                            parent=self,
+                        ) or ""
+                    fotos.append({"path": arquivo, "title": titulo.strip()})
+
         try:
-            gerar_pdf(sections, self.config_data.get("template_path", ""), save)
+            gerar_pdf(sections, self.config_data.get("template_path", ""), save, fotos=fotos)
             messagebox.showinfo("Sucesso", "PDF gerado!")
         except Exception as e:
             messagebox.showerror("Erro", str(e))
