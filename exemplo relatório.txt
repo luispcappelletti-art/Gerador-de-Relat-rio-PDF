@@ -1,0 +1,90 @@
+Relatório de Atendimento Técnico
+Cliente: WEG Jaraguá
+
+Equipamento:Lineacord
+
+Fonte: XPR 170
+
+CNC: Phoenix
+
+THC: Femcor THC
+
+Fabricante: Grupo BAW
+
+Contato Cliente: Fernando
+
+Data: 23/03/2026
+
+Técnico: Raoni
+
+Acompanhamento remoto: Luís Cappeletti
+
+1 – Descrição breve do problema
+Máquina não realizava abertura de arco e apresentava falhas relacionadas a gás e ignição, impossibilitando o corte.
+
+2 – Detalhamento completo do problema
+Durante a chegada ao cliente, foi identificado que a máquina inicialmente não estava energizada e havia inconsistências na infraestrutura elétrica e de gases.
+
+Após energização, observou-se que o sistema apresentava falha na abertura de arco, mesmo com acionamento da ignição. A placa de ignição indicava funcionamento parcial com acionamento de LEDs, porém sem geração de centelha.
+
+Foram identificadas múltiplas inconsistências críticas:
+
+Ligações de gases incorretas, com linhas invertidas entre oxigênio e ar comprimido.
+Cabo de arco piloto com polaridade invertida, onde o positivo estava ligado no cabeçote e o negativo na estrutura da máquina.
+Infraestrutura incompleta, com passagem de mangueiras sem finalização adequada.
+Divergência de pressão e comportamento inconsistente no sistema de gases.
+Máquina sem malha de aterramento adequada.
+Condições gerais da máquina degradadas.
+3 – Diagnóstico
+Sequência de diagnóstico executada:
+
+Verificação da alimentação elétrica da máquina:
+Confirmado alimentação 220V, compatível com o sistema instalado.
+Acesso ao CNC:
+Navegação até diagnóstico de gases via tela do sistema Phoenix.
+Validação de leitura de pressão através de testes de pré-fluxo e fluxo de corte.
+Teste de identificação das linhas de gás:
+Procedimento realizado abrindo uma linha por vez.
+Monitoramento da leitura no CNC para validação.
+Identificado cruzamento entre linhas de oxigênio e ar comprimido.
+Verificação do sistema de ignição:
+Análise da placa de ignição com LEDs ativos porém sem centelha.
+Teste do cabo de arco piloto.
+Teste elétrico do arco piloto:
+Medição de continuidade.
+Verificação de possível fuga para estrutura.
+Inspeção física do cabeamento:
+Identificação de polaridade invertida no circuito do arco piloto.
+4 – Ações corretivas
+Correção das ligações de gases:
+Reposicionamento correto das mangueiras de oxigênio e ar comprimido conforme leitura no CNC.
+Correção elétrica do arco piloto:
+Ajuste da polaridade:
+Positivo reposicionado corretamente.
+Negativo removido da estrutura da máquina.
+Validação das linhas de gás:
+Testes individuais de cada linha para garantir correspondência correta com leitura do sistema.
+Energização e testes progressivos:
+Execução de testes de ignição após correções.
+Ajustes finos conforme comportamento observado.
+5 – Resultado
+Após correção das ligações de gás e ajustes elétricos no arco piloto, a máquina passou a realizar abertura de arco normalmente.
+
+Foram realizados testes práticos de corte:
+
+Chapas de aço carbono
+Chapas de inox
+Programas reais de produção do cliente
+Resultado dos testes:
+
+Corte estável
+Sem falhas de ignição
+Qualidade de corte adequada
+Operação contínua sem interrupções
+6 – Estado final do sistema
+Máquina operacional
+Abertura de arco normalizada
+Sistema de gases funcionando corretamente
+Polaridade elétrica corrigida
+Corte validado em múltiplos materiais
+Equipamento liberado para produção
