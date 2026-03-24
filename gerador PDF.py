@@ -93,50 +93,55 @@ def parse_text(text):
 def processar_lista(texto, styles):
     elementos = []
     linhas = texto.split("\n")
+    marcador_regex = r"^(\d+[\.\)]|-|•|\u2022|°)\s+"
+    tem_topicos_explicitos = any(re.match(marcador_regex, linha.strip()) for linha in linhas)
 
     lista = []
-    item_atual = ""
 
-    def adicionar_item():
-        if item_atual.strip():
-            lista.append(
-                ListItem(
-                    Paragraph(item_atual.strip(), styles["Body"]),
-                    leftIndent=12,
-                    bulletText="°"
+    if tem_topicos_explicitos:
+        item_atual = ""
+
+        def adicionar_item():
+            if item_atual.strip():
+                lista.append(
+                    ListItem(
+                        Paragraph(item_atual.strip(), styles["Body"]),
+                        leftIndent=12,
+                        bulletText="°"
+                    )
                 )
-            )
 
-    for linha in linhas:
-        linha = linha.strip()
+        for linha in linhas:
+            linha = linha.strip()
+            if not linha:
+                continue
 
-        # NOVO ITEM
-        if re.match(r"^(\d+[\.\)]|-|•|\u2022|°)", linha):
-            if item_atual:
-                adicionar_item()
-                item_atual = ""
-
-            linha_limpa = re.sub(r"^(\d+[\.\)]|-|•|\u2022|°)\s*", "", linha)
-            item_atual = linha_limpa
-
-        else:
-            # CONTINUAÇÃO DO ITEM
-            if item_atual:
-                # Se a linha anterior terminou com ponto final,
-                # inicia um novo item automaticamente.
-                if item_atual.rstrip().endswith("."):
+            if re.match(marcador_regex, linha):
+                if item_atual:
                     adicionar_item()
-                    item_atual = linha
-                else:
-                    item_atual += " " + linha
-            else:
-                # Sem marcador explícito, considera como novo item da lista
-                if linha:
-                    item_atual = linha
+                    item_atual = ""
 
-    # último item
-    if item_atual:
-        adicionar_item()
+                linha_limpa = re.sub(marcador_regex, "", linha)
+                item_atual = linha_limpa
+            elif item_atual:
+                item_atual += " " + linha
+            else:
+                # Ignora linhas soltas antes do primeiro marcador.
+                continue
+
+        if item_atual:
+            adicionar_item()
+    else:
+        for linha in linhas:
+            linha = linha.strip()
+            if linha:
+                lista.append(
+                    ListItem(
+                        Paragraph(linha, styles["Body"]),
+                        leftIndent=12,
+                        bulletText="°"
+                    )
+                )
 
     if lista:
         elementos.append(
@@ -195,8 +200,9 @@ def gerar_pdf(sections, template_path, output_path, fotos=None):
     ]
 
     for label, key in campos:
-        if info.get(key):
-            dados.append([label, info[key]])
+        valor = (info.get(key) or "").strip()
+        if valor and valor != ".":
+            dados.append([label, valor])
 
     if dados:
         tabela = Table(dados, colWidths=[5*cm, 10*cm])
