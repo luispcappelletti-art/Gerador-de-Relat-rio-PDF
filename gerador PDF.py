@@ -24,6 +24,17 @@ except Exception:
 CONFIG_FILE = "config.json"
 SECOES_EDITAVEIS = ["descricao", "detalhamento", "diagnostico", "acoes", "resultado", "estado"]
 
+SECTION_HEADERS = {
+    "descricao": "1 – ESCOPO DO ATENDIMENTO",
+    "detalhamento": "2 – DETALHAMENTO DO PROBLEMA",
+    "diagnostico": "3 – DIAGNÓSTICO",
+    "acoes": "4 – AÇÕES CORRETIVAS",
+    "resultado": "5 – RESULTADO",
+    "estado": "6 – ESTADO FINAL",
+}
+
+PHOTO_LAYOUT_MODES = ["Dividir página", "Página inteira"]
+
 
 # =========================
 # CONFIG
@@ -213,6 +224,42 @@ def _coerce_offset_cm(value):
         return 0.0
 
 
+def _extract_section_body(raw_text, section_key):
+    text = (raw_text or "").strip()
+    if not text:
+        return ""
+    header = SECTION_HEADERS.get(section_key, "")
+    normalized_header = normalize(header) if header else ""
+    lines = text.splitlines()
+    if lines:
+        first = lines[0].strip().lstrip("#").strip()
+        first = re.sub(r"^\*+|\*+$", "", first).strip()
+        if normalized_header and normalize(first) == normalized_header:
+            return "\n".join(lines[1:]).strip()
+    return text
+
+
+def _compose_full_text_with_sections(base_text, sections):
+    header_pattern = re.compile(r"^\s*\d+\s*[–-]\s*.+$")
+    info_lines = []
+    for line in (base_text or "").splitlines():
+        if ":" in line and not header_pattern.match(line.strip()):
+            info_lines.append(line.rstrip())
+
+    blocks = []
+    if info_lines:
+        blocks.append("\n".join(info_lines).strip())
+
+    for key in SECOES_EDITAVEIS:
+        body = (sections.get(key) or "").strip()
+        if not body:
+            continue
+        header = SECTION_HEADERS.get(key, key.title())
+        blocks.append(f"{header}\n{body}".strip())
+
+    return "\n\n".join(block for block in blocks if block).strip()
+
+
 def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
     import uuid
     temp_pdf = output_path + f".tmp_{uuid.uuid4().hex[:8]}.pdf"
@@ -305,16 +352,31 @@ def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, fot
 
         largura_util = A4[0] - (5 * cm)
         espacamento = 0.8 * cm
-        colunas = 1 if foto_cols == 1 else 2
-        largura_max = largura_util if colunas == 1 else ((largura_util - espacamento) / 2)
-        altura_max = float(foto_max_height_cm) * cm
+        largura_metade = (largura_util - espacamento) / 2
+        metade_em_uso = False
 
         for idx, foto in enumerate(fotos, start=1):
-            if idx > 1:
-                if colunas == 1 or (idx - 1) % 2 == 0:
+            modo = str(foto.get("layout", "Dividir página"))
+            pagina_inteira = modo == "Página inteira"
+            ajuste_altura_cm = _coerce_offset_cm(foto.get("max_height_cm", foto_max_height_cm))
+            altura_max = (ajuste_altura_cm if ajuste_altura_cm > 0 else foto_max_height_cm) * cm
+            ajuste_largura_pct = max(30.0, min(130.0, float(foto.get("width_percent", 100.0)))) / 100.0
+
+            if pagina_inteira:
+                if idx > 1:
                     story.append(PageBreak())
+                metade_em_uso = False
+                largura_max = largura_util * ajuste_largura_pct
+            else:
+                if not metade_em_uso:
+                    if idx > 1:
+                        story.append(PageBreak())
+                    largura_max = largura_metade * ajuste_largura_pct
+                    metade_em_uso = True
                 else:
                     story.append(Spacer(1, 14))
+                    largura_max = largura_metade * ajuste_largura_pct
+                    metade_em_uso = False
 
             caminho = foto.get("path")
             titulo = foto.get("title") or f"Foto {idx}"
@@ -713,7 +775,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 command=lambda _v, k=key: self._on_offset_change(k),
             )
             offset.pack(side="left")
-            box = ctk.CTkTextbox(frame, wrap="word", height=90)
+            box = ctk.CTkTextbox(frame, wrap="word", height=110)
             box.pack(fill="both", expand=True, padx=6, pady=6)
             box.bind("<<Modified>>", self._on_section_text_edit)
             self.sections_tabs.add(frame, text=nomes[key])
@@ -723,10 +785,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         right = ctk.CTkFrame(self._main, fg_color="transparent")
         right.pack(side="right", fill="both", padx=(10, 0))
 
-        self.template_preview = ctk.CTkLabel(right, text="Prévia do template indisponível", width=320)
-        self.template_preview.pack(fill="x", pady=(0, 6))
-
-        self._preview_panel = PreviewPanel(right, width=420, fg_color=("#E8EEF3", "#1E2C38"), corner_radius=8)
+        self._preview_panel = PreviewPanel(right, width=520, fg_color=("#E8EEF3", "#1E2C38"), corner_radius=8)
         self._preview_panel.pack(fill="both", expand=True)
 
         self._engine = PreviewEngine(on_update=self._on_preview_ready, debounce_ms=900)
@@ -803,7 +862,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         texto = limpar_texto(self.text.get("1.0", "end").strip())
         sections = parse_text(texto)
         for key, box in self.section_widgets.items():
-            val = box.get("1.0", "end").strip()
+            val = _extract_section_body(box.get("1.0", "end"), key)
             if val:
                 sections[key] = val
             elif key in sections:
@@ -817,7 +876,10 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         try:
             for key, box in self.section_widgets.items():
                 box.delete("1.0", "end")
-                box.insert("1.0", sections.get(key, ""))
+                header = SECTION_HEADERS.get(key, key.title())
+                body = sections.get(key, "").strip()
+                composed = f"{header}\n{body}".strip()
+                box.insert("1.0", composed)
                 box.edit_modified(False)
         finally:
             self._suspend_section_events = False
@@ -914,22 +976,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             self.config_data["last_dir"] = os.path.dirname(filepath)
 
     def _update_template_preview_image(self):
-        tpl = self.config_data.get("template_path", "")
-        if not tpl or not os.path.exists(tpl):
-            self.template_preview.configure(text="Prévia do template indisponível", image=None)
-            return
-        try:
-            doc = fitz.open(tpl)
-            page = doc[0]
-            pix = page.get_pixmap(matrix=fitz.Matrix(0.25, 0.25), alpha=False)
-            doc.close()
-            img = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            img = img.resize((220, int(220 * img.height / img.width)), PILImage.LANCZOS)
-            tk_img = ImageTk.PhotoImage(img)
-            self._template_tk_img = tk_img
-            self.template_preview.configure(text="", image=tk_img)
-        except Exception:
-            self.template_preview.configure(text="Falha ao gerar prévia do template", image=None)
+        # Prévia dedicada do template removida: agora mostramos apenas a pré-visualização final do PDF.
+        return
 
     def select_template(self):
         file = filedialog.askopenfilename(initialdir=self._pick_initial_dir(), filetypes=[("PDF", "*.pdf")])
@@ -943,6 +991,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
     def _save_text_to_file(self):
         content = self.text.get("1.0", "end").strip()
+        sections_ui = self._get_sections_from_ui()
+        content = _compose_full_text_with_sections(content, sections_ui)
         if not content:
             messagebox.showwarning("Salvar", "Não há texto para salvar.")
             return
@@ -968,7 +1018,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             return
         self._remember_dir(arquivos[0])
         for arquivo in arquivos:
-            self.fotos.append({"path": arquivo, "title": os.path.basename(arquivo)})
+            self.fotos.append({"path": arquivo, "title": os.path.basename(arquivo), "layout": "Dividir página", "max_height_cm": float(self.foto_h_var.get()), "width_percent": 100.0})
         self._render_fotos_list()
         self._set_status(f"{len(arquivos)} foto(s) adicionada(s).")
         if self.chk_auto_var.get():
@@ -1016,6 +1066,36 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             entry.pack(side="left", fill="x", expand=True, padx=4)
             entry.bind("<KeyRelease>", lambda e, i=idx, ent=entry: self._set_foto_title(i, ent.get()))
 
+            layout_var = tk.StringVar(value=foto.get("layout", PHOTO_LAYOUT_MODES[0]))
+            layout_menu = ctk.CTkOptionMenu(
+                row,
+                variable=layout_var,
+                values=PHOTO_LAYOUT_MODES,
+                width=140,
+                command=lambda v, i=idx: self._set_foto_layout(i, v),
+            )
+            layout_menu.pack(side="left", padx=3)
+
+            height_var = tk.StringVar(value=f"{float(foto.get('max_height_cm', self.foto_h_var.get())):.1f}")
+            height_menu = ctk.CTkOptionMenu(
+                row,
+                variable=height_var,
+                values=["5.0", "6.0", "7.0", "8.1", "9.5", "11.0", "13.0", "16.0", "20.0"],
+                width=85,
+                command=lambda v, i=idx: self._set_foto_height(i, v),
+            )
+            height_menu.pack(side="left", padx=3)
+
+            width_var = tk.StringVar(value=f"{int(float(foto.get('width_percent', 100)))}%")
+            width_menu = ctk.CTkOptionMenu(
+                row,
+                variable=width_var,
+                values=["70%", "80%", "90%", "100%", "110%", "120%", "130%"],
+                width=78,
+                command=lambda v, i=idx: self._set_foto_width(i, v),
+            )
+            width_menu.pack(side="left", padx=3)
+
             ctk.CTkButton(row, text="↑", width=28, command=lambda i=idx: self._move_foto(i, -1)).pack(side="left", padx=1)
             ctk.CTkButton(row, text="↓", width=28, command=lambda i=idx: self._move_foto(i, 1)).pack(side="left", padx=1)
             ctk.CTkButton(row, text="✕", width=28, command=lambda i=idx: self._remove_foto(i)).pack(side="left", padx=1)
@@ -1023,6 +1103,30 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _set_foto_title(self, idx, title):
         if 0 <= idx < len(self.fotos):
             self.fotos[idx]["title"] = title.strip()
+            if self.chk_auto_var.get():
+                self.force_preview_update()
+
+    def _set_foto_layout(self, idx, layout):
+        if 0 <= idx < len(self.fotos):
+            self.fotos[idx]["layout"] = layout
+            if self.chk_auto_var.get():
+                self.force_preview_update()
+
+    def _set_foto_height(self, idx, value):
+        if 0 <= idx < len(self.fotos):
+            try:
+                self.fotos[idx]["max_height_cm"] = float(value)
+            except Exception:
+                self.fotos[idx]["max_height_cm"] = float(self.foto_h_var.get())
+            if self.chk_auto_var.get():
+                self.force_preview_update()
+
+    def _set_foto_width(self, idx, value):
+        if 0 <= idx < len(self.fotos):
+            try:
+                self.fotos[idx]["width_percent"] = float(str(value).replace("%", ""))
+            except Exception:
+                self.fotos[idx]["width_percent"] = 100.0
             if self.chk_auto_var.get():
                 self.force_preview_update()
 
