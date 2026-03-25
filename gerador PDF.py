@@ -23,6 +23,7 @@ except Exception:
 
 CONFIG_FILE = "config.json"
 SECOES_EDITAVEIS = ["descricao", "detalhamento", "diagnostico", "acoes", "resultado", "estado"]
+SECOES_PAINEL = ["cabecalho", *SECOES_EDITAVEIS]
 
 SECTION_HEADERS = {
     "descricao": "1 – ESCOPO DO ATENDIMENTO",
@@ -34,6 +35,47 @@ SECTION_HEADERS = {
 }
 
 PHOTO_LAYOUT_MODES = ["Dividir página", "Página inteira"]
+
+INFO_ALIASES = {
+    "equipamento": "equipamento",
+    "fonte": "fonte",
+    "cliente": "cliente",
+    "cnc": "cnc",
+    "thc": "thc",
+    "fabricante": "fabricante",
+    "contato cliente": "contato_cliente",
+    "data": "data",
+    "tecnico": "tecnico",
+    "técnico": "tecnico",
+    "acompanhamento remoto": "acompanhamento",
+    "acompanhamento": "acompanhamento",
+    "horario de inicio": "inicio",
+    "inicio": "inicio",
+    "horario de termino": "fim",
+    "fim": "fim",
+    "tempo do atendimento": "tempo_atendimento",
+    "tempo atendimento": "tempo_atendimento",
+    "tempo em espera": "tempo_espera",
+    "tempo espera": "tempo_espera",
+    "contato": "contato_cliente",
+}
+
+INFO_FIELDS = [
+    ("Equipamento", "equipamento"),
+    ("Fonte", "fonte"),
+    ("Cliente", "cliente"),
+    ("CNC", "cnc"),
+    ("THC", "thc"),
+    ("Fabricante", "fabricante"),
+    ("Contato Cliente", "contato_cliente"),
+    ("Data", "data"),
+    ("Técnico", "tecnico"),
+    ("Acompanhamento remoto", "acompanhamento"),
+    ("Início", "inicio"),
+    ("Fim", "fim"),
+    ("Tempo Atendimento", "tempo_atendimento"),
+    ("Tempo Espera", "tempo_espera"),
+]
 
 
 # =========================
@@ -71,30 +113,12 @@ def normalize(text):
 def parse_text(text):
     sections = {"info": {}}
 
-    aliases = {
-        "equipamento": "equipamento",
-        "fonte": "fonte",
-        "cliente": "cliente",
-        "cnc": "cnc",
-        "thc": "thc",
-        "fabricante": "fabricante",
-        "contato cliente": "contato_cliente",
-        "data": "data",
-        "tecnico": "tecnico",
-        "técnico": "tecnico",
-        "acompanhamento remoto": "acompanhamento",
-        "horario de inicio": "inicio",
-        "horario de termino": "fim",
-        "tempo do atendimento": "tempo_atendimento",
-        "tempo em espera": "tempo_espera",
-    }
-
     for line in text.splitlines():
         if ":" in line:
             k, v = line.split(":", 1)
             key = normalize(k)
-            if key in aliases:
-                sections["info"][aliases[key]] = v.strip()
+            if key in INFO_ALIASES:
+                sections["info"][INFO_ALIASES[key]] = v.strip()
 
     parts = re.split(r"\n\s*(\d+\s*[–-]\s*.+)", text)
 
@@ -241,10 +265,13 @@ def _extract_section_body(raw_text, section_key):
 
 def _compose_full_text_with_sections(base_text, sections):
     header_pattern = re.compile(r"^\s*\d+\s*[–-]\s*.+$")
-    info_lines = []
-    for line in (base_text or "").splitlines():
-        if ":" in line and not header_pattern.match(line.strip()):
-            info_lines.append(line.rstrip())
+    if sections.get("info"):
+        info_lines = _compose_info_text(sections.get("info", {})).splitlines()
+    else:
+        info_lines = []
+        for line in (base_text or "").splitlines():
+            if ":" in line and not header_pattern.match(line.strip()):
+                info_lines.append(line.rstrip())
 
     blocks = []
     if info_lines:
@@ -258,6 +285,35 @@ def _compose_full_text_with_sections(base_text, sections):
         blocks.append(f"{header}\n{body}".strip())
 
     return "\n\n".join(block for block in blocks if block).strip()
+
+
+def _compose_info_text(info):
+    info = info or {}
+    lines = []
+    for label, key in INFO_FIELDS:
+        value = info.get(key)
+        if _valor_info_preenchido(value):
+            lines.append(f"{label}: {str(value).strip()}")
+    return "\n".join(lines).strip()
+
+
+def _parse_info_from_editor(text):
+    info = {}
+    for line in (text or "").splitlines():
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        normalized_key = normalize(k)
+        info_key = INFO_ALIASES.get(normalized_key)
+        if info_key:
+            value = v.strip()
+            if value:
+                info[info_key] = value
+    return info
+
+
+def _parse_header_info_text(text):
+    return _parse_info_from_editor(text)
 
 
 def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
@@ -284,24 +340,7 @@ def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, fot
     info = sections.get("info", {})
     dados = []
 
-    campos = [
-        ("Equipamento", "equipamento"),
-        ("Fonte", "fonte"),
-        ("Cliente", "cliente"),
-        ("CNC", "cnc"),
-        ("THC", "thc"),
-        ("Fabricante", "fabricante"),
-        ("Contato Cliente", "contato_cliente"),
-        ("Data", "data"),
-        ("Técnico", "tecnico"),
-        ("Acompanhamento remoto", "acompanhamento"),
-        ("Início", "inicio"),
-        ("Fim", "fim"),
-        ("Tempo Atendimento", "tempo_atendimento"),
-        ("Tempo Espera", "tempo_espera"),
-    ]
-
-    for label, key in campos:
+    for label, key in INFO_FIELDS:
         valor = info.get(key)
         if _valor_info_preenchido(valor):
             dados.append([label, str(valor).strip()])
@@ -754,6 +793,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.section_widgets = {}
         self.section_offset_vars = {}
         nomes = {
+            "cabecalho": "Cabeçalho",
             "descricao": "Escopo",
             "detalhamento": "Detalhamento",
             "diagnostico": "Diagnóstico",
@@ -761,26 +801,27 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             "resultado": "Resultado",
             "estado": "Estado final",
         }
-        for key in SECOES_EDITAVEIS:
+        for key in SECOES_PAINEL:
             frame = ctk.CTkFrame(self.sections_tabs)
-            controls = ctk.CTkFrame(frame, fg_color="transparent")
-            controls.pack(fill="x", padx=6, pady=(6, 0))
-            ctk.CTkLabel(controls, text="Deslocamento antes do tópico (cm):").pack(side="left", padx=(0, 4))
-            offset_var = tk.StringVar(value="0.0")
-            offset = ctk.CTkOptionMenu(
-                controls,
-                variable=offset_var,
-                values=["0.0", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
-                width=90,
-                command=lambda _v, k=key: self._on_offset_change(k),
-            )
-            offset.pack(side="left")
+            if key != "cabecalho":
+                controls = ctk.CTkFrame(frame, fg_color="transparent")
+                controls.pack(fill="x", padx=6, pady=(6, 0))
+                ctk.CTkLabel(controls, text="Deslocamento antes do tópico (cm):").pack(side="left", padx=(0, 4))
+                offset_var = tk.StringVar(value="0.0")
+                offset = ctk.CTkOptionMenu(
+                    controls,
+                    variable=offset_var,
+                    values=["0.0", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
+                    width=90,
+                    command=lambda _v, k=key: self._on_offset_change(k),
+                )
+                offset.pack(side="left")
+                self.section_offset_vars[key] = offset_var
             box = ctk.CTkTextbox(frame, wrap="word", height=110)
             box.pack(fill="both", expand=True, padx=6, pady=6)
             box.bind("<<Modified>>", self._on_section_text_edit)
             self.sections_tabs.add(frame, text=nomes[key])
             self.section_widgets[key] = box
-            self.section_offset_vars[key] = offset_var
 
         right = ctk.CTkFrame(self._main, fg_color="transparent")
         right.pack(side="right", fill="both", padx=(10, 0))
@@ -861,7 +902,11 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _get_sections_from_ui(self):
         texto = limpar_texto(self.text.get("1.0", "end").strip())
         sections = parse_text(texto)
+        cabecalho = self.section_widgets["cabecalho"].get("1.0", "end")
+        sections["info"] = _parse_info_from_editor(cabecalho)
         for key, box in self.section_widgets.items():
+            if key == "cabecalho":
+                continue
             val = _extract_section_body(box.get("1.0", "end"), key)
             if val:
                 sections[key] = val
@@ -876,9 +921,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         try:
             for key, box in self.section_widgets.items():
                 box.delete("1.0", "end")
-                header = SECTION_HEADERS.get(key, key.title())
-                body = sections.get(key, "").strip()
-                composed = f"{header}\n{body}".strip()
+                if key == "cabecalho":
+                    composed = _compose_info_text(sections.get("info", {}))
+                else:
+                    header = SECTION_HEADERS.get(key, key.title())
+                    body = sections.get(key, "").strip()
+                    composed = f"{header}\n{body}".strip()
                 box.insert("1.0", composed)
                 box.edit_modified(False)
         finally:
