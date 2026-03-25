@@ -53,8 +53,18 @@ class ListaEInfoTests(unittest.TestCase):
                 "descricao": "novo escopo",
             },
         )
-        self.assertIn("Cliente: Atualizado", content)
+        self.assertIn("Empresa / Cliente: Atualizado", content)
         self.assertIn("1 – ESCOPO DO ATENDIMENTO", content)
+
+    def test_compose_info_text_mostra_campos_obrigatorios_vazios(self):
+        info_text = gerador_pdf._compose_info_text({}, include_required_empty=True)
+        self.assertIn("Técnico:", info_text)
+        self.assertIn("Empresa / Cliente:", info_text)
+
+    def test_parse_horarios_aceita_sem_formatacao(self):
+        horarios = gerador_pdf._parse_horarios_table("25032026 0800 1200 almoço\n25/03/2026|1300|1800|")
+        self.assertEqual(horarios[0], ["25/03/2026", "08:00", "12:00", "almoço"])
+        self.assertEqual(horarios[1], ["25/03/2026", "13:00", "18:00", ""])
 
 
 if __name__ == "__main__":

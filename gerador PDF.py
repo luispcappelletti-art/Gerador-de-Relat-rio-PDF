@@ -1,6 +1,6 @@
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 from tkinter import ttk
 import json, os, re, unicodedata, threading, tempfile
 
@@ -40,6 +40,10 @@ INFO_ALIASES = {
     "equipamento": "equipamento",
     "fonte": "fonte",
     "cliente": "cliente",
+    "empresa": "cliente",
+    "empresa cliente": "cliente",
+    "empresa / cliente": "cliente",
+    "empresa/cliente": "cliente",
     "cnc": "cnc",
     "thc": "thc",
     "fabricante": "fabricante",
@@ -63,7 +67,7 @@ INFO_ALIASES = {
 INFO_FIELDS = [
     ("Equipamento", "equipamento"),
     ("Fonte", "fonte"),
-    ("Cliente", "cliente"),
+    ("Empresa / Cliente", "cliente"),
     ("CNC", "cnc"),
     ("THC", "thc"),
     ("Fabricante", "fabricante"),
@@ -76,6 +80,8 @@ INFO_FIELDS = [
     ("Tempo Atendimento", "tempo_atendimento"),
     ("Tempo Espera", "tempo_espera"),
 ]
+
+MANDATORY_INFO_FIELDS = ("tecnico", "cliente")
 
 
 # =========================
@@ -287,13 +293,15 @@ def _compose_full_text_with_sections(base_text, sections):
     return "\n\n".join(block for block in blocks if block).strip()
 
 
-def _compose_info_text(info):
+def _compose_info_text(info, include_required_empty=False):
     info = info or {}
     lines = []
     for label, key in INFO_FIELDS:
         value = info.get(key)
         if _valor_info_preenchido(value):
             lines.append(f"{label}: {str(value).strip()}")
+        elif include_required_empty and key in MANDATORY_INFO_FIELDS:
+            lines.append(f"{label}: ")
     return "\n".join(lines).strip()
 
 
@@ -317,15 +325,51 @@ def _parse_header_info_text(text):
 
 
 def _parse_horarios_table(raw_text):
+    def _normalize_date(text):
+        t = str(text or "").strip()
+        if not t:
+            return ""
+        digits = re.sub(r"\D", "", t)
+        if len(digits) == 8:
+            return f"{digits[:2]}/{digits[2:4]}/{digits[4:]}"
+        if len(digits) == 6:
+            return f"{digits[:2]}/{digits[2:4]}/20{digits[4:]}"
+        return t
+
+    def _normalize_time(text):
+        t = str(text or "").strip()
+        if not t:
+            return ""
+        digits = re.sub(r"\D", "", t)
+        if len(digits) >= 4:
+            hh = digits[:2]
+            mm = digits[2:4]
+            return f"{hh}:{mm}"
+        if len(digits) <= 2:
+            return f"{digits.zfill(2)}:00"
+        return t
+
     linhas = []
     for raw_line in (raw_text or "").splitlines():
         line = raw_line.strip()
         if not line:
             continue
-        parts = [p.strip() for p in re.split(r"[|;]", line) if p.strip()]
-        if len(parts) != 4:
+        if line.lower().startswith("data"):
             continue
-        linhas.append(parts)
+        parts = [p.strip() for p in re.split(r"[|;]", line) if p.strip()]
+        if len(parts) < 3:
+            parts = [p.strip() for p in re.split(r"\s+", line) if p.strip()]
+        if len(parts) < 3:
+            continue
+        if len(parts) == 3:
+            parts.append("")
+        date, inicio, fim, intervalos = parts[:4]
+        linhas.append([
+            _normalize_date(date),
+            _normalize_time(inicio),
+            _normalize_time(fim),
+            intervalos,
+        ])
     return linhas
 
 
@@ -464,7 +508,6 @@ def gerar_pdf(
 
     horarios = horarios or []
     if horarios:
-        story.append(PageBreak())
         story.append(Paragraph("<b>TABELA DE HORÁRIOS DO ATENDIMENTO</b>", styles["Secao"]))
         story.append(Spacer(1, 8))
         dados_horarios = [["Data", "Início", "Fim", "Intervalos"], *horarios]
@@ -483,9 +526,23 @@ def gerar_pdf(
         ]))
         story.append(tabela_horarios)
 
-    story.append(PageBreak())
-    story.append(Spacer(1, 10 * cm))
-    story.append(Paragraph("<b>Assistência Técnica Grupo BAW</b>", styles["Titulo"]))
+    class _BottomNote(Flowable):
+        def __init__(self, text, style):
+            super().__init__()
+            self._text = text
+            self._style = style
+
+        def wrap(self, *_args):
+            return 0, 0
+
+        def draw(self):
+            paragraph = Paragraph(self._text, self._style)
+            width = A4[0] - (5 * cm)
+            w, h = paragraph.wrap(width, 3 * cm)
+            y = 2.9 * cm
+            paragraph.drawOn(self.canv, (A4[0] - w) / 2, y)
+
+    story.append(_BottomNote("<b>Assistência Técnica Grupo BAW</b>", styles["Titulo"]))
 
     def page_chrome(canvas, doc):
         canvas.saveState()
@@ -794,10 +851,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data.setdefault("preview_auto", True)
         self.config_data.setdefault("zoom_factor", 1.0)
         self.config_data.setdefault("last_dir", "")
+        self.config_data.setdefault("default_tecnico", "")
 
         self.fotos = []
         self._thumb_cache = []
         self._suspend_section_events = False
+        self._ensure_tecnico_login()
 
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=14, pady=(10, 4))
@@ -806,6 +865,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.label.pack(side="left")
 
         ctk.CTkButton(top, text="Selecionar Template", width=160, command=self.select_template).pack(side="left", padx=8)
+        ctk.CTkButton(top, text="Login técnico", width=120, command=self._change_tecnico_login).pack(side="left", padx=4)
         ctk.CTkButton(top, text="Atualizar prévia", width=130, command=self.force_preview_update).pack(side="left", padx=4)
 
         self.chk_auto_var = tk.BooleanVar(value=bool(self.config_data.get("preview_auto", True)))
@@ -933,6 +993,26 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _set_status(self, msg):
         self.status_label.configure(text=msg)
 
+    def _ensure_tecnico_login(self):
+        tecnico_salvo = str(self.config_data.get("default_tecnico", "")).strip()
+        if tecnico_salvo:
+            return
+        nome = simpledialog.askstring("Login do técnico", "Digite o nome do técnico:", parent=self)
+        if nome and nome.strip():
+            self.config_data["default_tecnico"] = nome.strip()
+            save_config(self.config_data)
+
+    def _change_tecnico_login(self):
+        atual = str(self.config_data.get("default_tecnico", "")).strip()
+        nome = simpledialog.askstring("Login do técnico", "Nome do técnico:", initialvalue=atual, parent=self)
+        if nome is None:
+            return
+        self.config_data["default_tecnico"] = nome.strip()
+        save_config(self.config_data)
+        self._refresh_sections_panel()
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
     def _build_drop_support(self):
         if not (TkinterDnD and DND_FILES):
             self._set_status("Arrastar e soltar desativado (tkinterdnd2 não instalado).")
@@ -981,6 +1061,9 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         sections = parse_text(texto)
         cabecalho = self.section_widgets["cabecalho"].get("1.0", "end")
         sections["info"] = _parse_info_from_editor(cabecalho)
+        tecnico_salvo = str(self.config_data.get("default_tecnico", "")).strip()
+        if tecnico_salvo and not _valor_info_preenchido(sections["info"].get("tecnico")):
+            sections["info"]["tecnico"] = tecnico_salvo
         for key, box in self.section_widgets.items():
             if key in {"cabecalho", "horarios"}:
                 continue
@@ -998,14 +1081,19 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _refresh_sections_panel(self):
         texto = self.text.get("1.0", "end").strip()
         sections = parse_text(limpar_texto(texto)) if texto else {}
+        info = dict(sections.get("info", {}))
+        tecnico_salvo = str(self.config_data.get("default_tecnico", "")).strip()
+        if tecnico_salvo and not _valor_info_preenchido(info.get("tecnico")):
+            info["tecnico"] = tecnico_salvo
+        sections["info"] = info
         self._suspend_section_events = True
         try:
             for key, box in self.section_widgets.items():
                 box.delete("1.0", "end")
                 if key == "cabecalho":
-                    composed = _compose_info_text(sections.get("info", {}))
+                    composed = _compose_info_text(sections.get("info", {}), include_required_empty=True)
                 elif key == "horarios":
-                    composed = ""
+                    composed = "Data Início Fim Intervalos\n"
                 else:
                     header = SECTION_HEADERS.get(key, key.title())
                     body = sections.get(key, "").strip()
