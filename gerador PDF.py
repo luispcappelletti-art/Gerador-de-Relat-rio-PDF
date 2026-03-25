@@ -316,7 +316,29 @@ def _parse_header_info_text(text):
     return _parse_info_from_editor(text)
 
 
-def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
+def _parse_horarios_table(raw_text):
+    linhas = []
+    for raw_line in (raw_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in re.split(r"[|;]", line) if p.strip()]
+        if len(parts) != 4:
+            continue
+        linhas.append(parts)
+    return linhas
+
+
+def gerar_pdf(
+    sections,
+    template_path,
+    output_path,
+    fotos=None,
+    foto_cols=2,
+    foto_max_height_cm=8.1,
+    section_offsets_cm=None,
+    horarios=None,
+):
     import uuid
     temp_pdf = output_path + f".tmp_{uuid.uuid4().hex[:8]}.pdf"
     fotos = fotos or []
@@ -419,6 +441,7 @@ def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, fot
 
             caminho = foto.get("path")
             titulo = foto.get("title") or f"Foto {idx}"
+            comentario = (foto.get("comment") or "").strip()
 
             story.append(Paragraph(f"<b>{idx}. {titulo}</b>", styles["Body"]))
             story.append(Spacer(1, 4))
@@ -435,6 +458,34 @@ def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, fot
                 story.append(imagem)
             except Exception:
                 story.append(Paragraph("Não foi possível carregar esta imagem.", styles["Body"]))
+            if comentario:
+                story.append(Spacer(1, 4))
+                story.append(Paragraph(f"<i>Comentário:</i> {comentario}", styles["Body"]))
+
+    horarios = horarios or []
+    if horarios:
+        story.append(PageBreak())
+        story.append(Paragraph("<b>TABELA DE HORÁRIOS DO ATENDIMENTO</b>", styles["Secao"]))
+        story.append(Spacer(1, 8))
+        dados_horarios = [["Data", "Início", "Fim", "Intervalos"], *horarios]
+        tabela_horarios = Table(dados_horarios, colWidths=[4 * cm, 3.2 * cm, 3.2 * cm, 5.6 * cm])
+        tabela_horarios.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DCE8F2")),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F8FBFD")),
+            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#C7D4DF")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DCE5EC")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("ALIGN", (1, 1), (2, -1), "CENTER"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        story.append(tabela_horarios)
+
+    story.append(PageBreak())
+    story.append(Spacer(1, 10 * cm))
+    story.append(Paragraph("<b>Assistência Técnica Grupo BAW</b>", styles["Titulo"]))
 
     def page_chrome(canvas, doc):
         canvas.saveState()
@@ -496,10 +547,22 @@ class PreviewEngine:
         self._current_foto_cols = 2
         self._current_foto_h = 8.1
         self._current_section_offsets_cm = {}
+        self._current_template_path = ""
+        self._current_horarios = []
         self._temp_dir = tempfile.mkdtemp()
         self._running = True
 
-    def schedule_update(self, text, sections=None, fotos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
+    def schedule_update(
+        self,
+        text,
+        sections=None,
+        fotos=None,
+        foto_cols=2,
+        foto_max_height_cm=8.1,
+        section_offsets_cm=None,
+        template_path="",
+        horarios=None,
+    ):
         with self._lock:
             self._current_text = text
             self._current_sections = sections or {}
@@ -507,6 +570,8 @@ class PreviewEngine:
             self._current_foto_cols = foto_cols
             self._current_foto_h = foto_max_height_cm
             self._current_section_offsets_cm = section_offsets_cm or {}
+            self._current_template_path = template_path or ""
+            self._current_horarios = horarios or []
             if self._timer is not None:
                 self._timer.cancel()
             self._timer = threading.Timer(self.debounce_ms / 1000.0, self._generate)
@@ -523,6 +588,8 @@ class PreviewEngine:
             foto_cols = self._current_foto_cols
             foto_max_height_cm = self._current_foto_h
             section_offsets_cm = self._current_section_offsets_cm
+            template_path = self._current_template_path
+            horarios = self._current_horarios
 
         import uuid
         temp_pdf = os.path.join(self._temp_dir, f"preview_{uuid.uuid4().hex[:8]}.pdf")
@@ -532,12 +599,13 @@ class PreviewEngine:
                 sections = parse_text(texto)
             gerar_pdf(
                 sections,
-                "",
+                template_path,
                 temp_pdf,
                 fotos=fotos,
                 foto_cols=foto_cols,
                 foto_max_height_cm=foto_max_height_cm,
                 section_offsets_cm=section_offsets_cm,
+                horarios=horarios,
             )
 
             doc = fitz.open(temp_pdf)
@@ -800,23 +868,32 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             "acoes": "Ações",
             "resultado": "Resultado",
             "estado": "Estado final",
+            "horarios": "Horários",
         }
-        for key in SECOES_PAINEL:
+        panel_keys = [*SECOES_PAINEL, "horarios"]
+        for key in panel_keys:
             frame = ctk.CTkFrame(self.sections_tabs)
             if key != "cabecalho":
                 controls = ctk.CTkFrame(frame, fg_color="transparent")
                 controls.pack(fill="x", padx=6, pady=(6, 0))
-                ctk.CTkLabel(controls, text="Deslocamento antes do tópico (cm):").pack(side="left", padx=(0, 4))
-                offset_var = tk.StringVar(value="0.0")
-                offset = ctk.CTkOptionMenu(
-                    controls,
-                    variable=offset_var,
-                    values=["0.0", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
-                    width=90,
-                    command=lambda _v, k=key: self._on_offset_change(k),
-                )
-                offset.pack(side="left")
-                self.section_offset_vars[key] = offset_var
+                if key == "horarios":
+                    ctk.CTkLabel(
+                        controls,
+                        text="Use uma linha por dia: Data | Início | Fim | Intervalos",
+                        text_color="#8EA1B2",
+                    ).pack(side="left", padx=(0, 4))
+                else:
+                    ctk.CTkLabel(controls, text="Deslocamento antes do tópico (cm):").pack(side="left", padx=(0, 4))
+                    offset_var = tk.StringVar(value="0.0")
+                    offset = ctk.CTkOptionMenu(
+                        controls,
+                        variable=offset_var,
+                        values=["0.0", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
+                        width=90,
+                        command=lambda _v, k=key: self._on_offset_change(k),
+                    )
+                    offset.pack(side="left")
+                    self.section_offset_vars[key] = offset_var
             box = ctk.CTkTextbox(frame, wrap="word", height=110)
             box.pack(fill="both", expand=True, padx=6, pady=6)
             box.bind("<<Modified>>", self._on_section_text_edit)
@@ -905,7 +982,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         cabecalho = self.section_widgets["cabecalho"].get("1.0", "end")
         sections["info"] = _parse_info_from_editor(cabecalho)
         for key, box in self.section_widgets.items():
-            if key == "cabecalho":
+            if key in {"cabecalho", "horarios"}:
                 continue
             val = _extract_section_body(box.get("1.0", "end"), key)
             if val:
@@ -913,6 +990,10 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             elif key in sections:
                 sections.pop(key)
         return sections
+
+    def _get_horarios_from_ui(self):
+        horarios_texto = self.section_widgets["horarios"].get("1.0", "end")
+        return _parse_horarios_table(horarios_texto)
 
     def _refresh_sections_panel(self):
         texto = self.text.get("1.0", "end").strip()
@@ -923,6 +1004,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 box.delete("1.0", "end")
                 if key == "cabecalho":
                     composed = _compose_info_text(sections.get("info", {}))
+                elif key == "horarios":
+                    composed = ""
                 else:
                     header = SECTION_HEADERS.get(key, key.title())
                     body = sections.get(key, "").strip()
@@ -973,6 +1056,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             foto_cols=int(self.foto_cols_var.get()),
             foto_max_height_cm=float(self.foto_h_var.get()),
             section_offsets_cm=self._get_section_offsets_cm(),
+            template_path=self.config_data.get("template_path", ""),
+            horarios=self._get_horarios_from_ui(),
         )
 
     def _on_preview_ready(self, images, error):
@@ -1022,6 +1107,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _remember_dir(self, filepath):
         if filepath:
             self.config_data["last_dir"] = os.path.dirname(filepath)
+            save_config(self.config_data)
 
     def _update_template_preview_image(self):
         # Prévia dedicada do template removida: agora mostramos apenas a pré-visualização final do PDF.
@@ -1032,10 +1118,11 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         if file:
             self.config_data["template_path"] = file
             self._remember_dir(file)
-            save_config(self.config_data)
             self.update_label()
             self._update_template_preview_image()
             self._set_status("Template atualizado.")
+            if self.chk_auto_var.get():
+                self.force_preview_update()
 
     def _save_text_to_file(self):
         content = self.text.get("1.0", "end").strip()
@@ -1066,7 +1153,14 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             return
         self._remember_dir(arquivos[0])
         for arquivo in arquivos:
-            self.fotos.append({"path": arquivo, "title": os.path.basename(arquivo), "layout": "Dividir página", "max_height_cm": float(self.foto_h_var.get()), "width_percent": 100.0})
+            self.fotos.append({
+                "path": arquivo,
+                "title": os.path.basename(arquivo),
+                "comment": "",
+                "layout": "Dividir página",
+                "max_height_cm": float(self.foto_h_var.get()),
+                "width_percent": 100.0,
+            })
         self._render_fotos_list()
         self._set_status(f"{len(arquivos)} foto(s) adicionada(s).")
         if self.chk_auto_var.get():
@@ -1113,6 +1207,10 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             entry.insert(0, foto.get("title", ""))
             entry.pack(side="left", fill="x", expand=True, padx=4)
             entry.bind("<KeyRelease>", lambda e, i=idx, ent=entry: self._set_foto_title(i, ent.get()))
+            comentario_entry = ctk.CTkEntry(row, placeholder_text="Comentário da foto")
+            comentario_entry.insert(0, foto.get("comment", ""))
+            comentario_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            comentario_entry.bind("<KeyRelease>", lambda e, i=idx, ent=comentario_entry: self._set_foto_comment(i, ent.get()))
 
             layout_var = tk.StringVar(value=foto.get("layout", PHOTO_LAYOUT_MODES[0]))
             layout_menu = ctk.CTkOptionMenu(
@@ -1157,6 +1255,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _set_foto_layout(self, idx, layout):
         if 0 <= idx < len(self.fotos):
             self.fotos[idx]["layout"] = layout
+            if self.chk_auto_var.get():
+                self.force_preview_update()
+
+    def _set_foto_comment(self, idx, comment):
+        if 0 <= idx < len(self.fotos):
+            self.fotos[idx]["comment"] = comment.strip()
             if self.chk_auto_var.get():
                 self.force_preview_update()
 
@@ -1206,6 +1310,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 foto_cols=int(self.foto_cols_var.get()),
                 foto_max_height_cm=float(self.foto_h_var.get()),
                 section_offsets_cm=self._get_section_offsets_cm(),
+                horarios=self._get_horarios_from_ui(),
             )
             self._set_status("PDF gerado com sucesso.")
             messagebox.showinfo("Sucesso", "PDF gerado!")
