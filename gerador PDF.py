@@ -2,9 +2,7 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import ttk
-import hashlib
 import json, os, re, unicodedata, threading, tempfile
-from datetime import datetime, timedelta
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -60,8 +58,6 @@ INFO_ALIASES = {
     "tempo em espera": "tempo_espera",
     "tempo espera": "tempo_espera",
     "contato": "contato_cliente",
-    "logo": "logo_path",
-    "logo cliente": "logo_path",
 }
 
 INFO_FIELDS = [
@@ -89,7 +85,6 @@ def load_config():
     defaults = {
         "template_path": "",
         "last_dir": "",
-        "default_output_dir": "",
         "preview_visible": True,
         "preview_auto": True,
         "zoom_factor": 1.0,
@@ -235,8 +230,7 @@ def processar_lista(texto, styles):
                 bulletType='bullet',
                 leftIndent=8,
                 bulletFontName="Helvetica",
-                bulletFontSize=10,
-                keepWithNext=True,
+                bulletFontSize=10
             )
         )
 
@@ -315,90 +309,11 @@ def _parse_info_from_editor(text):
             value = v.strip()
             if value:
                 info[info_key] = value
-    inicio = info.get("inicio")
-    fim = info.get("fim")
-    if inicio and fim and not info.get("tempo_atendimento"):
-        tempo = _calcular_tempo_atendimento(inicio, fim)
-        if tempo:
-            info["tempo_atendimento"] = tempo
     return info
-
-
-def _parse_hora_br(hora):
-    for fmt in ("%H:%M", "%H:%M:%S"):
-        try:
-            return datetime.strptime(hora.strip(), fmt)
-        except Exception:
-            continue
-    return None
-
-
-def _calcular_tempo_atendimento(inicio, fim):
-    inicio_dt = _parse_hora_br(str(inicio))
-    fim_dt = _parse_hora_br(str(fim))
-    if not inicio_dt or not fim_dt:
-        return ""
-    if fim_dt < inicio_dt:
-        fim_dt = fim_dt + timedelta(days=1)
-    tempo = fim_dt - inicio_dt
-    total_segundos = int(tempo.total_seconds())
-    horas = total_segundos // 3600
-    minutos = (total_segundos % 3600) // 60
-    segundos = total_segundos % 60
-    if segundos:
-        return f"{horas:02d}:{minutos:02d}:{segundos:02d}"
-    return f"{horas:02d}:{minutos:02d}"
 
 
 def _parse_header_info_text(text):
     return _parse_info_from_editor(text)
-
-
-def _build_cover_page(story, styles, info, logo_path=None):
-    story.append(Spacer(1, 4.2 * cm))
-    story.append(Paragraph("RELATÓRIO TÉCNICO DE ATENDIMENTO", styles["Titulo"]))
-    story.append(Spacer(1, 0.5 * cm))
-    story.append(Paragraph("Documento técnico gerado automaticamente", styles["BodyCenter"]))
-    story.append(Spacer(1, 1.2 * cm))
-
-    cliente = info.get("cliente", "-")
-    data = info.get("data", datetime.now().strftime("%d/%m/%Y"))
-    tecnico = info.get("tecnico", "-")
-
-    cover_table = Table(
-        [
-            ["Cliente", str(cliente).strip()],
-            ["Data", str(data).strip()],
-            ["Técnico", str(tecnico).strip()],
-        ],
-        colWidths=[4.5 * cm, 9.5 * cm],
-    )
-    cover_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FCFDFE")),
-        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#C7D4DF")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DCE5EC")),
-        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E9F0F6")),
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-    ]))
-    story.append(cover_table)
-
-    logo = logo_path or info.get("logo_path")
-    if logo and os.path.exists(logo):
-        story.append(Spacer(1, 1 * cm))
-        try:
-            img = PILImage.open(logo)
-            w, h = img.size
-            max_w, max_h = 7 * cm, 3 * cm
-            ratio = min(max_w / w, max_h / h)
-            story.append(Image(logo, width=w * ratio, height=h * ratio, hAlign="CENTER"))
-        except Exception:
-            pass
-
-    story.append(PageBreak())
 
 
 def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
@@ -419,20 +334,10 @@ def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, fot
 
     styles.add(ParagraphStyle(name="Body",
                               fontSize=10.5, leading=15, textColor=colors.HexColor("#1F2B37")))
-    styles.add(ParagraphStyle(name="BodyCenter",
-                              parent=styles["Body"],
-                              alignment=1))
 
     story = []
 
     info = sections.get("info", {})
-    _build_cover_page(story, styles, info)
-
-    story.append(Paragraph("<b>SUMÁRIO</b>", styles["Secao"]))
-    for key in SECOES_EDITAVEIS:
-        if sections.get(key):
-            story.append(Paragraph(f"• {SECTION_HEADERS.get(key, key.title())}", styles["Body"]))
-    story.append(Spacer(1, 10))
     dados = []
 
     for label, key in INFO_FIELDS:
@@ -574,33 +479,6 @@ def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, fot
         os.rename(temp_pdf, output_path)
 
 
-def gerar_docx(sections, output_path):
-    from docx import Document
-
-    doc = Document()
-    info = sections.get("info", {})
-    doc.add_heading("RELATÓRIO TÉCNICO DE ATENDIMENTO", level=0)
-    doc.add_paragraph(f"Cliente: {info.get('cliente', '-')}")
-    doc.add_paragraph(f"Data: {info.get('data', datetime.now().strftime('%d/%m/%Y'))}")
-    doc.add_paragraph(f"Técnico: {info.get('tecnico', '-')}")
-    doc.add_paragraph("")
-    doc.add_heading("Sumário", level=1)
-    for key in SECOES_EDITAVEIS:
-        if sections.get(key):
-            doc.add_paragraph(SECTION_HEADERS.get(key, key.title()), style="List Bullet")
-
-    for key in SECOES_EDITAVEIS:
-        conteudo = sections.get(key)
-        if not conteudo:
-            continue
-        doc.add_heading(SECTION_HEADERS.get(key, key.title()), level=1)
-        for linha in str(conteudo).splitlines():
-            linha = linha.strip()
-            if linha:
-                doc.add_paragraph(linha)
-    doc.save(output_path)
-
-
 # =========================
 # PREVIEW ENGINE
 # =========================
@@ -618,44 +496,22 @@ class PreviewEngine:
         self._current_foto_cols = 2
         self._current_foto_h = 8.1
         self._current_section_offsets_cm = {}
-        self._last_preview_hash = None
         self._temp_dir = tempfile.mkdtemp()
         self._running = True
 
     def schedule_update(self, text, sections=None, fotos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
-        fotos = fotos or []
-        sections = sections or {}
-        section_offsets_cm = section_offsets_cm or {}
-        payload = json.dumps(
-            {
-                "text": text or "",
-                "sections": sections,
-                "fotos": fotos,
-                "foto_cols": int(foto_cols),
-                "foto_max_height_cm": float(foto_max_height_cm),
-                "offsets": section_offsets_cm,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            default=str,
-        )
-        current_hash = hashlib.md5(payload.encode("utf-8")).hexdigest()
-        if current_hash == self._last_preview_hash:
-            return False
-        self._last_preview_hash = current_hash
         with self._lock:
             self._current_text = text
-            self._current_sections = sections
-            self._current_fotos = [dict(f) for f in fotos]
+            self._current_sections = sections or {}
+            self._current_fotos = [dict(f) for f in (fotos or [])]
             self._current_foto_cols = foto_cols
             self._current_foto_h = foto_max_height_cm
-            self._current_section_offsets_cm = section_offsets_cm
+            self._current_section_offsets_cm = section_offsets_cm or {}
             if self._timer is not None:
                 self._timer.cancel()
             self._timer = threading.Timer(self.debounce_ms / 1000.0, self._generate)
             self._timer.daemon = True
             self._timer.start()
-        return True
 
     def _generate(self):
         if not self._running:
@@ -870,7 +726,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data.setdefault("preview_auto", True)
         self.config_data.setdefault("zoom_factor", 1.0)
         self.config_data.setdefault("last_dir", "")
-        self.config_data.setdefault("default_output_dir", "")
 
         self.fotos = []
         self._thumb_cache = []
@@ -889,7 +744,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         ctk.CTkCheckBox(top, text="Atualizar prévia automaticamente", variable=self.chk_auto_var, command=self._on_auto_preview_toggle).pack(side="left", padx=10)
 
         ctk.CTkButton(top, text="Gerar PDF", width=120, command=self.generate).pack(side="right", padx=4)
-        ctk.CTkButton(top, text="Gerar DOCX", width=120, command=self.generate_docx).pack(side="right", padx=4)
         ctk.CTkButton(top, text="Limpar", width=90, command=self._limpar).pack(side="right", padx=4)
 
         self._preview_visible = bool(self.config_data.get("preview_visible", True))
@@ -1004,15 +858,11 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
     def _build_drop_support(self):
         if not (TkinterDnD and DND_FILES):
-            self._set_status(
-                "Arrastar e soltar desativado. Instale com: pip install tkinterdnd2"
-            )
+            self._set_status("Arrastar e soltar desativado (tkinterdnd2 não instalado).")
             return
         try:
             self.text.drop_target_register(DND_FILES)
             self.text.dnd_bind("<<Drop>>", self._on_drop_text_file)
-            self.fotos_list.drop_target_register(DND_FILES)
-            self.fotos_list.dnd_bind("<<Drop>>", self._on_drop_images)
         except Exception:
             self._set_status("Não foi possível ativar arrastar e soltar.")
 
@@ -1116,7 +966,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self._preview_panel.show_generating()
         self._set_status("Gerando pré-visualização...")
         preview_text = limpar_texto(texto)
-        scheduled = self._engine.schedule_update(
+        self._engine.schedule_update(
             preview_text,
             sections=sections,
             fotos=self.fotos,
@@ -1124,8 +974,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             foto_max_height_cm=float(self.foto_h_var.get()),
             section_offsets_cm=self._get_section_offsets_cm(),
         )
-        if not scheduled:
-            self._set_status("Prévia já está atualizada.")
 
     def _on_preview_ready(self, images, error):
         def _update():
@@ -1173,10 +1021,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
     def _remember_dir(self, filepath):
         if filepath:
-            dirpath = os.path.dirname(filepath)
-            self.config_data["last_dir"] = dirpath
-            self.config_data["default_output_dir"] = dirpath
-            save_config(self.config_data)
+            self.config_data["last_dir"] = os.path.dirname(filepath)
 
     def _update_template_preview_image(self):
         # Prévia dedicada do template removida: agora mostramos apenas a pré-visualização final do PDF.
@@ -1200,7 +1045,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             messagebox.showwarning("Salvar", "Não há texto para salvar.")
             return
         path = filedialog.asksaveasfilename(
-            initialdir=self.config_data.get("default_output_dir") or self._pick_initial_dir(),
+            initialdir=self._pick_initial_dir(),
             defaultextension=".txt",
             filetypes=[("Texto", "*.txt"), ("Markdown", "*.md")],
         )
@@ -1211,13 +1056,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self._remember_dir(path)
         self._set_status(f"Texto salvo em {os.path.basename(path)}.")
 
-    def _add_fotos(self, arquivos=None):
-        if not arquivos:
-            arquivos = filedialog.askopenfilenames(
-                initialdir=self._pick_initial_dir(),
-                title="Selecione as fotos",
-                filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp")],
-            )
+    def _add_fotos(self):
+        arquivos = filedialog.askopenfilenames(
+            initialdir=self._pick_initial_dir(),
+            title="Selecione as fotos",
+            filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp")],
+        )
         if not arquivos:
             return
         self._remember_dir(arquivos[0])
@@ -1227,19 +1071,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self._set_status(f"{len(arquivos)} foto(s) adicionada(s).")
         if self.chk_auto_var.get():
             self.force_preview_update()
-
-    def _on_drop_images(self, event):
-        raw = event.data.strip()
-        paths = [p.strip("{}") for p in self.tk.splitlist(raw)]
-        arquivos = []
-        for p in paths:
-            if os.path.splitext(p)[1].lower() in {".png", ".jpg", ".jpeg", ".bmp", ".webp"}:
-                arquivos.append(p)
-        if not arquivos:
-            self._set_status("Nenhuma imagem válida encontrada no arrastar/soltar.")
-            return
-        self._add_fotos(arquivos=arquivos)
-        self._set_status(f"{len(arquivos)} imagem(ns) adicionada(s) por arrastar/soltar.")
 
     def _move_foto(self, idx, delta):
         novo = idx + delta
@@ -1315,23 +1146,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
             ctk.CTkButton(row, text="↑", width=28, command=lambda i=idx: self._move_foto(i, -1)).pack(side="left", padx=1)
             ctk.CTkButton(row, text="↓", width=28, command=lambda i=idx: self._move_foto(i, 1)).pack(side="left", padx=1)
-            ctk.CTkButton(row, text="⟳", width=28, command=lambda i=idx: self._rotate_foto(i)).pack(side="left", padx=1)
             ctk.CTkButton(row, text="✕", width=28, command=lambda i=idx: self._remove_foto(i)).pack(side="left", padx=1)
-
-    def _rotate_foto(self, idx):
-        if not (0 <= idx < len(self.fotos)):
-            return
-        try:
-            img = PILImage.open(self.fotos[idx]["path"])
-            img = img.rotate(90, expand=True)
-            temp_path = os.path.join(tempfile.gettempdir(), f"rotated_{idx}_{os.path.basename(self.fotos[idx]['path'])}")
-            img.save(temp_path)
-            self.fotos[idx]["path"] = temp_path
-            self._render_fotos_list()
-            if self.chk_auto_var.get():
-                self.force_preview_update()
-        except Exception as e:
-            messagebox.showerror("Erro", f"Falha ao rotacionar imagem: {e}")
 
     def _set_foto_title(self, idx, title):
         if 0 <= idx < len(self.fotos):
@@ -1370,7 +1185,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             return
 
         save = filedialog.asksaveasfilename(
-            initialdir=self.config_data.get("default_output_dir") or self._pick_initial_dir(),
+            initialdir=self._pick_initial_dir(),
             defaultextension=".pdf",
             filetypes=[("PDF", "*.pdf")],
         )
@@ -1396,29 +1211,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             messagebox.showinfo("Sucesso", "PDF gerado!")
         except Exception as e:
             self._set_status("Erro ao gerar PDF.")
-            messagebox.showerror("Erro", str(e))
-
-    def generate_docx(self):
-        texto = self.text.get("1.0", "end").strip()
-        if not texto:
-            messagebox.showerror("Erro", "Cole o texto primeiro")
-            return
-
-        save = filedialog.asksaveasfilename(
-            initialdir=self.config_data.get("default_output_dir") or self._pick_initial_dir(),
-            defaultextension=".docx",
-            filetypes=[("Word", "*.docx")],
-        )
-        if not save:
-            return
-        self._remember_dir(save)
-        sections = self._get_sections_from_ui()
-        try:
-            gerar_docx(sections, save)
-            self._set_status("DOCX gerado com sucesso.")
-            messagebox.showinfo("Sucesso", "DOCX gerado!")
-        except Exception as e:
-            self._set_status("Erro ao gerar DOCX.")
             messagebox.showerror("Erro", str(e))
 
 
