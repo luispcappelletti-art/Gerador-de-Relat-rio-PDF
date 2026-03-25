@@ -206,7 +206,14 @@ def processar_lista(texto, styles):
 # =========================
 # PDF
 # =========================
-def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, foto_max_height_cm=8.1):
+def _coerce_offset_cm(value):
+    try:
+        return max(0.0, float(value))
+    except Exception:
+        return 0.0
+
+
+def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
     import uuid
     temp_pdf = output_path + f".tmp_{uuid.uuid4().hex[:8]}.pdf"
     fotos = fotos or []
@@ -220,7 +227,7 @@ def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, fot
 
     styles.add(ParagraphStyle(name="Secao",
                               fontSize=12.5, spaceBefore=14, spaceAfter=7,
-                              textColor=colors.HexColor("#123A5A"), leading=15))
+                              textColor=colors.HexColor("#123A5A"), leading=15, keepWithNext=True))
 
     styles.add(ParagraphStyle(name="Body",
                               fontSize=10.5, leading=15, textColor=colors.HexColor("#1F2B37")))
@@ -269,22 +276,27 @@ def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, fot
         story.append(tabela)
         story.append(Spacer(1, 15))
 
-    def add_secao(titulo, conteudo):
+    section_offsets_cm = section_offsets_cm or {}
+
+    def add_secao(titulo, conteudo, section_key):
+        offset_cm = _coerce_offset_cm(section_offsets_cm.get(section_key, 0))
+        if offset_cm > 0:
+            story.append(Spacer(1, offset_cm * cm))
         story.append(Paragraph(f"<b>{titulo}</b>", styles["Secao"]))
         story.extend(processar_lista(conteudo, styles))
 
     if sections.get("descricao"):
-        add_secao("1 – ESCOPO DO ATENDIMENTO", sections["descricao"])
+        add_secao("1 – ESCOPO DO ATENDIMENTO", sections["descricao"], "descricao")
     if sections.get("detalhamento"):
-        add_secao("2 – DETALHAMENTO DO PROBLEMA", sections["detalhamento"])
+        add_secao("2 – DETALHAMENTO DO PROBLEMA", sections["detalhamento"], "detalhamento")
     if sections.get("diagnostico"):
-        add_secao("3 – DIAGNÓSTICO", sections["diagnostico"])
+        add_secao("3 – DIAGNÓSTICO", sections["diagnostico"], "diagnostico")
     if sections.get("acoes"):
-        add_secao("4 – AÇÕES CORRETIVAS", sections["acoes"])
+        add_secao("4 – AÇÕES CORRETIVAS", sections["acoes"], "acoes")
     if sections.get("resultado"):
-        add_secao("5 – RESULTADO", sections["resultado"])
+        add_secao("5 – RESULTADO", sections["resultado"], "resultado")
     if sections.get("estado"):
-        add_secao("6 – ESTADO FINAL", sections["estado"])
+        add_secao("6 – ESTADO FINAL", sections["estado"], "estado")
 
     if fotos:
         story.append(PageBreak())
@@ -378,12 +390,22 @@ class PreviewEngine:
         self._timer = None
         self._lock = threading.Lock()
         self._current_text = ""
+        self._current_sections = {}
+        self._current_fotos = []
+        self._current_foto_cols = 2
+        self._current_foto_h = 8.1
+        self._current_section_offsets_cm = {}
         self._temp_dir = tempfile.mkdtemp()
         self._running = True
 
-    def schedule_update(self, text):
+    def schedule_update(self, text, sections=None, fotos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
         with self._lock:
             self._current_text = text
+            self._current_sections = sections or {}
+            self._current_fotos = [dict(f) for f in (fotos or [])]
+            self._current_foto_cols = foto_cols
+            self._current_foto_h = foto_max_height_cm
+            self._current_section_offsets_cm = section_offsets_cm or {}
             if self._timer is not None:
                 self._timer.cancel()
             self._timer = threading.Timer(self.debounce_ms / 1000.0, self._generate)
@@ -395,13 +417,27 @@ class PreviewEngine:
             return
         with self._lock:
             text = self._current_text
+            sections = self._current_sections
+            fotos = self._current_fotos
+            foto_cols = self._current_foto_cols
+            foto_max_height_cm = self._current_foto_h
+            section_offsets_cm = self._current_section_offsets_cm
 
         import uuid
         temp_pdf = os.path.join(self._temp_dir, f"preview_{uuid.uuid4().hex[:8]}.pdf")
         try:
-            texto = limpar_texto(text)
-            sections = parse_text(texto)
-            gerar_pdf(sections, "", temp_pdf)
+            if not sections:
+                texto = limpar_texto(text)
+                sections = parse_text(texto)
+            gerar_pdf(
+                sections,
+                "",
+                temp_pdf,
+                fotos=fotos,
+                foto_cols=foto_cols,
+                foto_max_height_cm=foto_max_height_cm,
+                section_offsets_cm=section_offsets_cm,
+            )
 
             doc = fitz.open(temp_pdf)
             images = []
@@ -617,10 +653,22 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         options.pack(fill="x", padx=14, pady=(0, 6))
         ctk.CTkLabel(options, text="Layout das fotos:").pack(side="left")
         self.foto_cols_var = tk.StringVar(value="2")
-        ctk.CTkOptionMenu(options, variable=self.foto_cols_var, values=["1", "2"], width=80).pack(side="left", padx=6)
+        ctk.CTkOptionMenu(
+            options,
+            variable=self.foto_cols_var,
+            values=["1", "2"],
+            width=80,
+            command=lambda _v: self._on_photo_layout_change(),
+        ).pack(side="left", padx=6)
         ctk.CTkLabel(options, text="colunas | altura máx (cm):").pack(side="left", padx=(8, 4))
         self.foto_h_var = tk.StringVar(value="8.1")
-        ctk.CTkOptionMenu(options, variable=self.foto_h_var, values=["6.0", "7.0", "8.1", "9.5", "11.0"], width=90).pack(side="left")
+        ctk.CTkOptionMenu(
+            options,
+            variable=self.foto_h_var,
+            values=["6.0", "7.0", "8.1", "9.5", "11.0"],
+            width=90,
+            command=lambda _v: self._on_photo_layout_change(),
+        ).pack(side="left")
 
         self._main = ctk.CTkFrame(self, fg_color="transparent")
         self._main.pack(fill="both", expand=True, padx=14, pady=(0, 6))
@@ -642,6 +690,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.sections_tabs = ttk.Notebook(left)
         self.sections_tabs.pack(fill="both", expand=True)
         self.section_widgets = {}
+        self.section_offset_vars = {}
         nomes = {
             "descricao": "Escopo",
             "detalhamento": "Detalhamento",
@@ -652,11 +701,24 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         }
         for key in SECOES_EDITAVEIS:
             frame = ctk.CTkFrame(self.sections_tabs)
+            controls = ctk.CTkFrame(frame, fg_color="transparent")
+            controls.pack(fill="x", padx=6, pady=(6, 0))
+            ctk.CTkLabel(controls, text="Deslocamento antes do tópico (cm):").pack(side="left", padx=(0, 4))
+            offset_var = tk.StringVar(value="0.0")
+            offset = ctk.CTkOptionMenu(
+                controls,
+                variable=offset_var,
+                values=["0.0", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
+                width=90,
+                command=lambda _v, k=key: self._on_offset_change(k),
+            )
+            offset.pack(side="left")
             box = ctk.CTkTextbox(frame, wrap="word", height=90)
             box.pack(fill="both", expand=True, padx=6, pady=6)
             box.bind("<<Modified>>", self._on_section_text_edit)
             self.sections_tabs.add(frame, text=nomes[key])
             self.section_widgets[key] = box
+            self.section_offset_vars[key] = offset_var
 
         right = ctk.CTkFrame(self._main, fg_color="transparent")
         right.pack(side="right", fill="both", padx=(10, 0))
@@ -730,6 +792,13 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         if self.chk_auto_var.get():
             self.force_preview_update()
 
+    def _on_offset_change(self, _section_key):
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
+    def _get_section_offsets_cm(self):
+        return {key: _coerce_offset_cm(var.get()) for key, var in self.section_offset_vars.items()}
+
     def _get_sections_from_ui(self):
         texto = limpar_texto(self.text.get("1.0", "end").strip())
         sections = parse_text(texto)
@@ -756,6 +825,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _limpar(self):
         self.text.delete("1.0", "end")
         self._refresh_sections_panel()
+        for var in self.section_offset_vars.values():
+            var.set("0.0")
         self.fotos = []
         self._render_fotos_list()
         self._preview_panel.show_status("A pré-visualização aparecerá aqui...")
@@ -772,20 +843,27 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         estado = "ativada" if self.chk_auto_var.get() else "desativada"
         self._set_status(f"Prévia automática {estado}.")
 
+    def _on_photo_layout_change(self):
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
     def force_preview_update(self):
         texto = self.text.get("1.0", "end").strip()
-        if not texto:
+        sections = self._get_sections_from_ui() if texto else {}
+        if not texto and not self.fotos:
             self._preview_panel.show_status("A pré-visualização aparecerá aqui...")
             return
         self._preview_panel.show_generating()
         self._set_status("Gerando pré-visualização...")
-        joined = []
-        for key in SECOES_EDITAVEIS:
-            val = self.section_widgets[key].get("1.0", "end").strip()
-            if val:
-                joined.append(f"{key}:\n{val}")
-        preview_text = limpar_texto(texto + "\n\n" + "\n\n".join(joined))
-        self._engine.schedule_update(preview_text)
+        preview_text = limpar_texto(texto)
+        self._engine.schedule_update(
+            preview_text,
+            sections=sections,
+            fotos=self.fotos,
+            foto_cols=int(self.foto_cols_var.get()),
+            foto_max_height_cm=float(self.foto_h_var.get()),
+            section_offsets_cm=self._get_section_offsets_cm(),
+        )
 
     def _on_preview_ready(self, images, error):
         def _update():
@@ -893,6 +971,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             self.fotos.append({"path": arquivo, "title": os.path.basename(arquivo)})
         self._render_fotos_list()
         self._set_status(f"{len(arquivos)} foto(s) adicionada(s).")
+        if self.chk_auto_var.get():
+            self.force_preview_update()
 
     def _move_foto(self, idx, delta):
         novo = idx + delta
@@ -900,10 +980,14 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             return
         self.fotos[idx], self.fotos[novo] = self.fotos[novo], self.fotos[idx]
         self._render_fotos_list()
+        if self.chk_auto_var.get():
+            self.force_preview_update()
 
     def _remove_foto(self, idx):
         self.fotos.pop(idx)
         self._render_fotos_list()
+        if self.chk_auto_var.get():
+            self.force_preview_update()
 
     def _render_fotos_list(self):
         for w in self.fotos_list.winfo_children():
@@ -939,6 +1023,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _set_foto_title(self, idx, title):
         if 0 <= idx < len(self.fotos):
             self.fotos[idx]["title"] = title.strip()
+            if self.chk_auto_var.get():
+                self.force_preview_update()
 
     def generate(self):
         texto = self.text.get("1.0", "end").strip()
@@ -967,6 +1053,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 fotos=self.fotos,
                 foto_cols=int(self.foto_cols_var.get()),
                 foto_max_height_cm=float(self.foto_h_var.get()),
+                section_offsets_cm=self._get_section_offsets_cm(),
             )
             self._set_status("PDF gerado com sucesso.")
             messagebox.showinfo("Sucesso", "PDF gerado!")
