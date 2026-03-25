@@ -9,6 +9,8 @@ ctk_stub = types.SimpleNamespace(CTk=type("CTk", (), {}), CTkLabel=object, CTkBu
 sys.modules.setdefault("customtkinter", ctk_stub)
 pypdf_stub = types.SimpleNamespace(PdfReader=object, PdfWriter=object)
 sys.modules.setdefault("pypdf", pypdf_stub)
+fitz_stub = types.SimpleNamespace(open=lambda *_args, **_kwargs: None, Matrix=lambda *_args, **_kwargs: None)
+sys.modules.setdefault("fitz", fitz_stub)
 
 MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "gerador PDF.py"
 spec = importlib.util.spec_from_file_location("gerador_pdf", MODULE_PATH)
@@ -34,6 +36,25 @@ class ListaEInfoTests(unittest.TestCase):
         self.assertFalse(gerador_pdf._valor_info_preenchido("."))
         self.assertFalse(gerador_pdf._valor_info_preenchido("   .   "))
         self.assertTrue(gerador_pdf._valor_info_preenchido("ok"))
+
+    def test_parse_header_info_text_aceita_aliases(self):
+        info = gerador_pdf._parse_header_info_text(
+            "Técnico: Ana\nHorário de término: 12:00\nTempo atendimento: 30 min"
+        )
+        self.assertEqual(info["tecnico"], "Ana")
+        self.assertEqual(info["fim"], "12:00")
+        self.assertEqual(info["tempo_atendimento"], "30 min")
+
+    def test_compose_full_text_prioriza_info_editada(self):
+        content = gerador_pdf._compose_full_text_with_sections(
+            "Cliente: Original",
+            {
+                "info": {"cliente": "Atualizado"},
+                "descricao": "novo escopo",
+            },
+        )
+        self.assertIn("Cliente: Atualizado", content)
+        self.assertIn("1 – ESCOPO DO ATENDIMENTO", content)
 
 
 if __name__ == "__main__":
