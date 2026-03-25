@@ -453,26 +453,27 @@ def _build_cover_content(canvas_obj, info, watermark_path="", watermark_opacity=
     canvas_obj.setLineWidth(1.5)
     canvas_obj.line(2.5 * cm, page_h - 6.0 * cm, page_w - 2.5 * cm, page_h - 6.0 * cm)
 
-    # --- Tabela 1: dados do equipamento/cliente ---
-    campos_equip = [
-        ("Nome do Cliente",   info.get("cliente", "")),
-        ("Contato no cliente", info.get("contato_cliente", "")),
-        ("Equipamento",       info.get("equipamento", "")),
-        ("Modelo da Fonte",   info.get("fonte", "")),
-        ("Controle de Altura", info.get("thc", "")),
-        ("Marca do CNC",      info.get("cnc", "")),
-        ("Fabricante",        info.get("fabricante", "")),
-    ]
-    campos_equip = [(l, v) for l, v in campos_equip if _valor_info_preenchido(v)]
-
-    # --- Tabela 2: dados de tempo/técnico ---
-    campos_tempo = [
-        ("Data início",         info.get("inicio", info.get("data", ""))),
-        ("Data  final",         info.get("fim", "")),
-        ("Técnico Responsável", info.get("tecnico", "")),
-        ("Acompanhamento",      info.get("acompanhamento", "")),
-    ]
-    campos_tempo = [(l, v) for l, v in campos_tempo if _valor_info_preenchido(v)]
+    # Todos os dados de cabeçalho devem aparecer na capa
+    cover_labels = {
+        "equipamento": "Equipamento",
+        "fonte": "Modelo da Fonte",
+        "cliente": "Nome do Cliente",
+        "cnc": "Marca do CNC",
+        "thc": "Controle de Altura",
+        "fabricante": "Fabricante",
+        "contato_cliente": "Contato no Cliente",
+        "data": "Data",
+        "tecnico": "Técnico Responsável",
+        "acompanhamento": "Acompanhamento",
+        "inicio": "Data início",
+        "fim": "Data final",
+        "tempo_atendimento": "Tempo Atendimento",
+        "tempo_espera": "Tempo Espera",
+    }
+    all_cover_fields = [(cover_labels[k], info.get(k, "")) for _, k in INFO_FIELDS]
+    visible_fields = [(l, v) for l, v in all_cover_fields if _valor_info_preenchido(v)]
+    if not visible_fields:
+        visible_fields = all_cover_fields
 
     col_label = 4.5 * cm
     col_value = page_w - 2.5 * cm - 2.5 * cm - col_label
@@ -513,12 +514,16 @@ def _build_cover_content(canvas_obj, info, watermark_path="", watermark_opacity=
 
     y_cursor = page_h - 7.2 * cm
 
-    if campos_equip:
-        y_cursor = _draw_info_table(canvas_obj, campos_equip, y_cursor)
-        y_cursor -= 0.8 * cm
+    # Divide em duas tabelas para ocupar melhor a capa
+    split_idx = max(1, (len(visible_fields) + 1) // 2)
+    campos_topo = visible_fields[:split_idx]
+    campos_base = visible_fields[split_idx:]
 
-    if campos_tempo:
-        _draw_info_table(canvas_obj, campos_tempo, y_cursor)
+    if campos_topo:
+        y_cursor = _draw_info_table(canvas_obj, campos_topo, y_cursor)
+        y_cursor -= 0.9 * cm
+    if campos_base:
+        _draw_info_table(canvas_obj, campos_base, y_cursor)
 
     canvas_obj.showPage()
 
@@ -686,39 +691,6 @@ def gerar_pdf(
     story = []
 
     info = sections.get("info", {})
-    dados = []
-
-    for label, key in INFO_FIELDS:
-        valor = info.get(key)
-        if _valor_info_preenchido(valor):
-            dados.append([label, str(valor).strip()])
-
-    if dados:
-        # Tabela de info em grid 2 colunas (dois pares por linha quando possível)
-        pares = []
-        for i in range(0, len(dados), 2):
-            esq = dados[i]
-            dir_ = dados[i + 1] if i + 1 < len(dados) else ["", ""]
-            pares.append([esq[0], esq[1], dir_[0], dir_[1]])
-
-        tabela = Table(pares, colWidths=[3.8 * cm, 5.5 * cm, 3.8 * cm, 4.5 * cm])
-        tabela.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FCFDFE")),
-            ("BOX", (0, 0), (-1, -1), 1, COR_BORDA),
-            ("INNERGRID", (0, 0), (-1, -1), 0.5, COR_BORDA_INNER),
-            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E9F0F6")),
-            ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#E9F0F6")),
-            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-            ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9.5),
-            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, -1), 6),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ]))
-        story.append(tabela)
-        story.append(Spacer(1, 15))
 
     section_offsets_cm = section_offsets_cm or {}
 
@@ -855,20 +827,7 @@ def gerar_pdf(
             _apply_watermark_logo(canvas_obj, _wm_path, _wm_opacity)
 
         canvas_obj.saveState()
-        canvas_obj.setFillColor(COR_FUNDO_LEVE)
-        canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=0, fill=1)
-        canvas_obj.setStrokeColor(COR_BORDA)
-        canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=1, fill=0)
-
-        # Linha de acento no cabeçalho
-        canvas_obj.setFillColor(COR_ACENTO)
-        canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, 0.3 * cm, 1.2 * cm, stroke=0, fill=1)
-
-        canvas_obj.setFont("Helvetica-Bold", 12)
-        canvas_obj.setFillColor(COR_PRIMARIA)
-        canvas_obj.drawCentredString(A4[0] / 2, A4[1] - 1.95 * cm, "RELATÓRIO TÉCNICO DE ATENDIMENTO")
-
-        # Rodapé com cliente
+        # Apenas rodapé nas páginas internas (cabeçalho fica apenas na capa)
         cliente = _info_ref.get("cliente", "")
         canvas_obj.setFont("Helvetica", 8.5)
         canvas_obj.setFillColor(COR_RODAPE_TXT)
