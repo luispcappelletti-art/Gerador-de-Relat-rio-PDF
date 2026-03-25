@@ -96,6 +96,14 @@ def load_config():
         "preview_auto": True,
         "zoom_factor": 1.0,
         "window_geometry": "1280x750",
+        "default_tecnico": "",
+        "foto_cols": "2",
+        "foto_max_height_cm": "8.1",
+        "section_offsets_cm": {},
+        "watermark_path": "",
+        "watermark_opacity": "0.12",
+        "watermark_scale": "0.75",
+        "cover_header_scale": "1.8",
     }
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -392,6 +400,10 @@ def gerar_pdf(
     foto_max_height_cm=8.1,
     section_offsets_cm=None,
     horarios=None,
+    watermark_path="",
+    watermark_opacity=0.12,
+    watermark_scale=0.75,
+    cover_header_scale=1.8,
 ):
     import uuid
     temp_pdf = output_path + f".tmp_{uuid.uuid4().hex[:8]}.pdf"
@@ -422,21 +434,31 @@ def gerar_pdf(
             dados.append([label, str(valor).strip()])
 
     if dados:
-        tabela = Table(dados, colWidths=[5 * cm, 10 * cm])
+        cover_scale = max(1.0, min(3.0, float(cover_header_scale or 1.8)))
+        cover_font_size = 10.2 * cover_scale
+        cover_padding = max(6, int(8 * cover_scale))
+        tabela = Table(dados, colWidths=[5 * cm, 10 * cm], repeatRows=0)
         tabela.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FCFDFE")),
             ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#C7D4DF")),
             ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DCE5EC")),
             ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E9F0F6")),
             ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, -1), 6),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("FONTSIZE", (0, 0), (-1, -1), cover_font_size),
+            ("LEFTPADDING", (0, 0), (-1, -1), cover_padding),
+            ("RIGHTPADDING", (0, 0), (-1, -1), cover_padding),
+            ("TOPPADDING", (0, 0), (-1, -1), max(6, int(10 * cover_scale))),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), max(6, int(10 * cover_scale))),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ]))
+        story.append(Spacer(1, max(1.4, (3.4 - cover_scale)) * cm))
         story.append(tabela)
-        story.append(Spacer(1, 15))
+    else:
+        story.append(Spacer(1, 4.5 * cm))
+        story.append(Paragraph("<b>CABEÇALHO DO ATENDIMENTO</b>", styles["Titulo"]))
+        story.append(Spacer(1, 0.7 * cm))
+        story.append(Paragraph("Sem dados preenchidos no cabeçalho.", styles["Body"]))
+    story.append(PageBreak())
 
     section_offsets_cm = section_offsets_cm or {}
 
@@ -478,7 +500,7 @@ def gerar_pdf(
             ("TOPPADDING", (0, 0), (-1, -1), 5),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ]))
-        story.append(tabela_horarios)
+        story.append(KeepTogether([tabela_horarios]))
 
     if fotos:
         story.append(Paragraph("<b>ANEXOS FOTOGRÁFICOS</b>", styles["Secao"]))
@@ -550,6 +572,31 @@ def gerar_pdf(
 
     def _draw_page_chrome(canvas_obj, page_number):
         canvas_obj.saveState()
+        wm_path = str(watermark_path or "").strip()
+        if wm_path and os.path.exists(wm_path):
+            try:
+                op = max(0.02, min(0.95, float(watermark_opacity)))
+            except Exception:
+                op = 0.12
+            try:
+                scale = max(0.2, min(2.5, float(watermark_scale)))
+            except Exception:
+                scale = 0.75
+            try:
+                image = ImageReader(wm_path)
+                iw, ih = image.getSize()
+                max_w = A4[0] * scale
+                max_h = A4[1] * scale
+                factor = min(max_w / iw, max_h / ih)
+                draw_w = iw * factor
+                draw_h = ih * factor
+                x = (A4[0] - draw_w) / 2
+                y = (A4[1] - draw_h) / 2
+                canvas_obj.setFillAlpha(op)
+                canvas_obj.drawImage(image, x, y, draw_w, draw_h, preserveAspectRatio=True, mask="auto")
+                canvas_obj.setFillAlpha(1)
+            except Exception:
+                pass
         canvas_obj.setFillColor(colors.HexColor("#F5F8FB"))
         canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=0, fill=1)
         canvas_obj.setStrokeColor(colors.HexColor("#D1DCE6"))
@@ -631,6 +678,10 @@ class PreviewEngine:
         self._current_section_offsets_cm = {}
         self._current_template_path = ""
         self._current_horarios = []
+        self._current_watermark_path = ""
+        self._current_watermark_opacity = 0.12
+        self._current_watermark_scale = 0.75
+        self._current_cover_header_scale = 1.8
         self._temp_dir = tempfile.mkdtemp()
         self._running = True
 
@@ -644,6 +695,10 @@ class PreviewEngine:
         section_offsets_cm=None,
         template_path="",
         horarios=None,
+        watermark_path="",
+        watermark_opacity=0.12,
+        watermark_scale=0.75,
+        cover_header_scale=1.8,
     ):
         with self._lock:
             self._current_text = text
@@ -654,6 +709,10 @@ class PreviewEngine:
             self._current_section_offsets_cm = section_offsets_cm or {}
             self._current_template_path = template_path or ""
             self._current_horarios = horarios or []
+            self._current_watermark_path = watermark_path or ""
+            self._current_watermark_opacity = watermark_opacity
+            self._current_watermark_scale = watermark_scale
+            self._current_cover_header_scale = cover_header_scale
             if self._timer is not None:
                 self._timer.cancel()
             self._timer = threading.Timer(self.debounce_ms / 1000.0, self._generate)
@@ -672,6 +731,10 @@ class PreviewEngine:
             section_offsets_cm = self._current_section_offsets_cm
             template_path = self._current_template_path
             horarios = self._current_horarios
+            watermark_path = self._current_watermark_path
+            watermark_opacity = self._current_watermark_opacity
+            watermark_scale = self._current_watermark_scale
+            cover_header_scale = self._current_cover_header_scale
 
         import uuid
         temp_pdf = os.path.join(self._temp_dir, f"preview_{uuid.uuid4().hex[:8]}.pdf")
@@ -688,6 +751,10 @@ class PreviewEngine:
                 foto_max_height_cm=foto_max_height_cm,
                 section_offsets_cm=section_offsets_cm,
                 horarios=horarios,
+                watermark_path=watermark_path,
+                watermark_opacity=watermark_opacity,
+                watermark_scale=watermark_scale,
+                cover_header_scale=cover_header_scale,
             )
 
             doc = fitz.open(temp_pdf)
@@ -972,7 +1039,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         options = ctk.CTkFrame(self, fg_color="transparent")
         options.pack(fill="x", padx=14, pady=(0, 6))
         ctk.CTkLabel(options, text="Layout das fotos:").pack(side="left")
-        self.foto_cols_var = tk.StringVar(value="2")
+        self.foto_cols_var = tk.StringVar(value=str(self.config_data.get("foto_cols", "2")))
         ctk.CTkOptionMenu(
             options,
             variable=self.foto_cols_var,
@@ -981,13 +1048,34 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             command=lambda _v: self._on_photo_layout_change(),
         ).pack(side="left", padx=6)
         ctk.CTkLabel(options, text="colunas | altura máx (cm):").pack(side="left", padx=(8, 4))
-        self.foto_h_var = tk.StringVar(value="8.1")
+        self.foto_h_var = tk.StringVar(value=str(self.config_data.get("foto_max_height_cm", "8.1")))
         ctk.CTkOptionMenu(
             options,
             variable=self.foto_h_var,
             values=["6.0", "7.0", "8.1", "9.5", "11.0"],
             width=90,
             command=lambda _v: self._on_photo_layout_change(),
+        ).pack(side="left")
+        ctk.CTkLabel(options, text="Marca d'água:").pack(side="left", padx=(10, 4))
+        ctk.CTkButton(options, text="Selecionar", width=92, command=self.select_watermark).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(options, text="Limpar", width=68, command=self.clear_watermark).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(options, text="opacidade:").pack(side="left", padx=(4, 4))
+        self.watermark_opacity_var = tk.StringVar(value=str(self.config_data.get("watermark_opacity", "0.12")))
+        ctk.CTkOptionMenu(
+            options,
+            variable=self.watermark_opacity_var,
+            values=["0.05", "0.08", "0.12", "0.16", "0.20", "0.25", "0.30", "0.35", "0.40"],
+            width=86,
+            command=lambda _v: self._on_watermark_change(),
+        ).pack(side="left")
+        ctk.CTkLabel(options, text="tamanho:").pack(side="left", padx=(8, 4))
+        self.watermark_scale_var = tk.StringVar(value=str(self.config_data.get("watermark_scale", "0.75")))
+        ctk.CTkOptionMenu(
+            options,
+            variable=self.watermark_scale_var,
+            values=["0.40", "0.55", "0.75", "0.90", "1.05", "1.25", "1.45"],
+            width=84,
+            command=lambda _v: self._on_watermark_change(),
         ).pack(side="left")
 
         self._main = ctk.CTkFrame(self, fg_color="transparent")
@@ -1022,6 +1110,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             "horarios": "Horários",
         }
         panel_keys = [*SECOES_PAINEL, "horarios"]
+        saved_offsets = self.config_data.get("section_offsets_cm", {}) or {}
         for key in panel_keys:
             frame = ctk.CTkFrame(self.sections_tabs)
             if key != "cabecalho":
@@ -1035,7 +1124,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                     ).pack(side="left", padx=(0, 4))
                 else:
                     ctk.CTkLabel(controls, text="Deslocamento antes do tópico (cm):").pack(side="left", padx=(0, 4))
-                    offset_var = tk.StringVar(value="0.0")
+                    offset_var = tk.StringVar(value=str(saved_offsets.get(key, "0.0")))
                     offset = ctk.CTkOptionMenu(
                         controls,
                         variable=offset_var,
@@ -1054,6 +1143,15 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 box.bind("<<Modified>>", self._on_section_text_edit)
             self.sections_tabs.add(frame, text=nomes[key])
             self.section_widgets[key] = box
+        ctk.CTkLabel(options, text="Escala da capa (cabeçalho):").pack(side="left", padx=(10, 4))
+        self.cover_header_scale_var = tk.StringVar(value=str(self.config_data.get("cover_header_scale", "1.8")))
+        ctk.CTkOptionMenu(
+            options,
+            variable=self.cover_header_scale_var,
+            values=["1.0", "1.2", "1.5", "1.8", "2.1", "2.4", "2.8"],
+            width=86,
+            command=lambda _v: self._on_cover_scale_change(),
+        ).pack(side="left")
 
         right = ctk.CTkFrame(self._main, fg_color="transparent")
         right.pack(side="right", fill="both", padx=(10, 0))
@@ -1151,6 +1249,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             self.force_preview_update()
 
     def _on_offset_change(self, _section_key):
+        self.config_data["section_offsets_cm"] = self._get_section_offsets_cm()
         if self.chk_auto_var.get():
             self.force_preview_update()
 
@@ -1234,6 +1333,38 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self._set_status(f"Prévia automática {estado}.")
 
     def _on_photo_layout_change(self):
+        self.config_data["foto_cols"] = str(self.foto_cols_var.get())
+        self.config_data["foto_max_height_cm"] = str(self.foto_h_var.get())
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
+    def _on_watermark_change(self):
+        self.config_data["watermark_opacity"] = str(self.watermark_opacity_var.get())
+        self.config_data["watermark_scale"] = str(self.watermark_scale_var.get())
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
+    def _on_cover_scale_change(self):
+        self.config_data["cover_header_scale"] = str(self.cover_header_scale_var.get())
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
+    def select_watermark(self):
+        file = filedialog.askopenfilename(
+            initialdir=self._pick_initial_dir(),
+            filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp")],
+        )
+        if not file:
+            return
+        self.config_data["watermark_path"] = file
+        self._remember_dir(file)
+        self._set_status("Marca d'água atualizada.")
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
+    def clear_watermark(self):
+        self.config_data["watermark_path"] = ""
+        self._set_status("Marca d'água removida.")
         if self.chk_auto_var.get():
             self.force_preview_update()
 
@@ -1255,6 +1386,10 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             section_offsets_cm=self._get_section_offsets_cm(),
             template_path=self.config_data.get("template_path", ""),
             horarios=self._get_horarios_from_ui(),
+            watermark_path=self.config_data.get("watermark_path", ""),
+            watermark_opacity=float(self.watermark_opacity_var.get()),
+            watermark_scale=float(self.watermark_scale_var.get()),
+            cover_header_scale=float(self.cover_header_scale_var.get()),
         )
 
     def _on_preview_ready(self, images, error):
@@ -1290,6 +1425,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data["preview_visible"] = self._preview_visible
         self.config_data["zoom_factor"] = self._preview_panel.get_zoom_factor()
         self.config_data["preview_auto"] = bool(self.chk_auto_var.get())
+        self.config_data["foto_cols"] = str(self.foto_cols_var.get())
+        self.config_data["foto_max_height_cm"] = str(self.foto_h_var.get())
+        self.config_data["section_offsets_cm"] = self._get_section_offsets_cm()
+        self.config_data["watermark_opacity"] = str(self.watermark_opacity_var.get())
+        self.config_data["watermark_scale"] = str(self.watermark_scale_var.get())
+        self.config_data["cover_header_scale"] = str(self.cover_header_scale_var.get())
         save_config(self.config_data)
         self._engine.stop()
         self.destroy()
@@ -1508,6 +1649,10 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 foto_max_height_cm=float(self.foto_h_var.get()),
                 section_offsets_cm=self._get_section_offsets_cm(),
                 horarios=self._get_horarios_from_ui(),
+                watermark_path=self.config_data.get("watermark_path", ""),
+                watermark_opacity=float(self.watermark_opacity_var.get()),
+                watermark_scale=float(self.watermark_scale_var.get()),
+                cover_header_scale=float(self.cover_header_scale_var.get()),
             )
             self._set_status("PDF gerado com sucesso.")
             messagebox.showinfo("Sucesso", "PDF gerado!")
