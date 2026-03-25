@@ -4,6 +4,7 @@ from tkinter import filedialog, messagebox
 from tkinter import ttk
 import hashlib
 import json, os, re, unicodedata, threading, tempfile
+from datetime import datetime, timedelta
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -338,7 +339,6 @@ def _calcular_tempo_atendimento(inicio, fim):
     if not inicio_dt or not fim_dt:
         return ""
     if fim_dt < inicio_dt:
-        from datetime import timedelta
         fim_dt = fim_dt + timedelta(days=1)
     tempo = fim_dt - inicio_dt
     total_segundos = int(tempo.total_seconds())
@@ -1004,7 +1004,9 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
     def _build_drop_support(self):
         if not (TkinterDnD and DND_FILES):
-            self._set_status("Arrastar e soltar desativado (tkinterdnd2 não instalado).")
+            self._set_status(
+                "Arrastar e soltar desativado. Instale com: pip install tkinterdnd2"
+            )
             return
         try:
             self.text.drop_target_register(DND_FILES)

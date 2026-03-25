@@ -22,6 +22,12 @@ pip install -r requirements.txt
 python app.py --input exemplo.txt --output relatorio.pdf
 ```
 
+Para interface gráfica completa (com prévia e arrastar/soltar imagens), execute:
+
+```bash
+python "gerador PDF.py"
+```
+
 Formato de entrada sugerido:
 
 ```text
