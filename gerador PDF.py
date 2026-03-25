@@ -10,6 +10,7 @@ from reportlab.platypus import *
 from reportlab.lib.styles import *
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas as pdf_canvas
 
 from pypdf import PdfReader, PdfWriter
 import fitz  # pymupdf — instale com: pip install pymupdf
@@ -459,62 +460,6 @@ def gerar_pdf(
     if sections.get("estado"):
         add_secao("6 – ESTADO FINAL", sections["estado"], "estado")
 
-    if fotos:
-        story.append(PageBreak())
-        story.append(Paragraph("<b>ANEXOS FOTOGRÁFICOS</b>", styles["Secao"]))
-        story.append(Spacer(1, 6))
-
-        largura_util = A4[0] - (5 * cm)
-        espacamento = 0.8 * cm
-        largura_metade = (largura_util - espacamento) / 2
-        metade_em_uso = False
-
-        for idx, foto in enumerate(fotos, start=1):
-            modo = str(foto.get("layout", "Dividir página"))
-            pagina_inteira = modo == "Página inteira"
-            ajuste_altura_cm = _coerce_offset_cm(foto.get("max_height_cm", foto_max_height_cm))
-            altura_max = (ajuste_altura_cm if ajuste_altura_cm > 0 else foto_max_height_cm) * cm
-            ajuste_largura_pct = max(30.0, min(130.0, float(foto.get("width_percent", 100.0)))) / 100.0
-
-            if pagina_inteira:
-                if idx > 1:
-                    story.append(PageBreak())
-                metade_em_uso = False
-                largura_max = largura_util * ajuste_largura_pct
-            else:
-                if not metade_em_uso:
-                    if idx > 1:
-                        story.append(PageBreak())
-                    largura_max = largura_metade * ajuste_largura_pct
-                    metade_em_uso = True
-                else:
-                    story.append(Spacer(1, 14))
-                    largura_max = largura_metade * ajuste_largura_pct
-                    metade_em_uso = False
-
-            caminho = foto.get("path")
-            titulo = foto.get("title") or f"Foto {idx}"
-            comentario = (foto.get("comment") or "").strip()
-
-            story.append(Paragraph(f"<b>{idx}. {titulo}</b>", styles["Body"]))
-            story.append(Spacer(1, 4))
-
-            try:
-                img_reader = ImageReader(caminho)
-                largura_original, altura_original = img_reader.getSize()
-                escala = min(largura_max / largura_original, altura_max / altura_original)
-                largura = largura_original * escala
-                altura = altura_original * escala
-
-                imagem = Image(caminho, width=largura, height=altura)
-                imagem.hAlign = "CENTER"
-                story.append(imagem)
-            except Exception:
-                story.append(Paragraph("Não foi possível carregar esta imagem.", styles["Body"]))
-            if comentario:
-                story.append(Spacer(1, 4))
-                story.append(Paragraph(f"<i>Comentário:</i> {comentario}", styles["Body"]))
-
     horarios = horarios or []
     if horarios:
         story.append(Paragraph("<b>TABELA DE HORÁRIOS DO ATENDIMENTO</b>", styles["Secao"]))
@@ -535,30 +480,110 @@ def gerar_pdf(
         ]))
         story.append(tabela_horarios)
 
-    story.append(Spacer(1, 14))
-    story.append(Paragraph("<b>Assistência Técnica Grupo BAW</b>", styles["Titulo"]))
+    if fotos:
+        story.append(Paragraph("<b>ANEXOS FOTOGRÁFICOS</b>", styles["Secao"]))
+        story.append(Spacer(1, 6))
 
-    def page_chrome(canvas, doc):
-        canvas.saveState()
-        canvas.setFillColor(colors.HexColor("#F5F8FB"))
-        canvas.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=0, fill=1)
-        canvas.setStrokeColor(colors.HexColor("#D1DCE6"))
-        canvas.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=1, fill=0)
-        canvas.setFont("Helvetica-Bold", 12)
-        canvas.setFillColor(colors.HexColor("#0E2A44"))
-        canvas.drawCentredString(A4[0] / 2, A4[1] - 1.95 * cm, "RELATÓRIO TÉCNICO DE ATENDIMENTO")
+        largura_util = A4[0] - (5 * cm)
+        espacamento = 0.8 * cm
+        largura_metade = (largura_util - espacamento) / 2
+        pending_half_blocks = []
 
-        canvas.setFont("Helvetica", 8.8)
-        canvas.setFillColor(colors.HexColor("#5B6E7D"))
-        canvas.drawString(2.5 * cm, 1.4 * cm, "Relatório técnico")
-        canvas.drawRightString(18.5 * cm, 1.4 * cm, f"Página {doc.page}")
-        canvas.restoreState()
+        def _build_photo_block(foto_item, foto_idx, largura_max):
+            titulo = foto_item.get("title") or f"Foto {foto_idx}"
+            comentario = (foto_item.get("comment") or "").strip()
+            caminho = foto_item.get("path")
+            ajuste_altura_cm = _coerce_offset_cm(foto_item.get("max_height_cm", foto_max_height_cm))
+            altura_max = (ajuste_altura_cm if ajuste_altura_cm > 0 else foto_max_height_cm) * cm
+            ajuste_largura_pct = max(30.0, min(130.0, float(foto_item.get("width_percent", 100.0)))) / 100.0
+            largura_limite = largura_max * ajuste_largura_pct
+
+            bloco = [Paragraph(f"<b>{foto_idx}. {titulo}</b>", styles["Body"]), Spacer(1, 4)]
+            try:
+                img_reader = ImageReader(caminho)
+                largura_original, altura_original = img_reader.getSize()
+                escala = min(largura_limite / largura_original, altura_max / altura_original)
+                largura = largura_original * escala
+                altura = altura_original * escala
+                imagem = Image(caminho, width=largura, height=altura)
+                imagem.hAlign = "CENTER"
+                bloco.append(imagem)
+            except Exception:
+                bloco.append(Paragraph("Não foi possível carregar esta imagem.", styles["Body"]))
+
+            if comentario:
+                bloco.append(Spacer(1, 4))
+                bloco.append(Paragraph(f"<i>Comentário:</i> {comentario}", styles["Body"]))
+            return KeepTogether(bloco)
+
+        def _flush_half_blocks():
+            nonlocal pending_half_blocks
+            if not pending_half_blocks:
+                return
+            row = pending_half_blocks
+            if len(row) == 1:
+                row = [row[0], Spacer(1, 1)]
+            tbl = Table([row], colWidths=[largura_metade, largura_metade])
+            tbl.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+            story.append(tbl)
+            story.append(Spacer(1, 10))
+            pending_half_blocks = []
+
+        for idx, foto in enumerate(fotos, start=1):
+            modo = str(foto.get("layout", "Dividir página"))
+            if modo == "Página inteira":
+                _flush_half_blocks()
+                bloco = _build_photo_block(foto, idx, largura_util)
+                story.append(bloco)
+                story.append(Spacer(1, 10))
+            else:
+                pending_half_blocks.append(_build_photo_block(foto, idx, largura_metade))
+                if len(pending_half_blocks) == 2:
+                    _flush_half_blocks()
+        _flush_half_blocks()
+
+    def _draw_page_chrome(canvas_obj, page_number):
+        canvas_obj.saveState()
+        canvas_obj.setFillColor(colors.HexColor("#F5F8FB"))
+        canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=0, fill=1)
+        canvas_obj.setStrokeColor(colors.HexColor("#D1DCE6"))
+        canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=1, fill=0)
+        canvas_obj.setFont("Helvetica-Bold", 12)
+        canvas_obj.setFillColor(colors.HexColor("#0E2A44"))
+        canvas_obj.drawCentredString(A4[0] / 2, A4[1] - 1.95 * cm, "RELATÓRIO TÉCNICO DE ATENDIMENTO")
+
+        canvas_obj.setFont("Helvetica", 8.8)
+        canvas_obj.setFillColor(colors.HexColor("#5B6E7D"))
+        canvas_obj.drawString(2.5 * cm, 1.4 * cm, "Relatório técnico")
+        canvas_obj.drawRightString(18.5 * cm, 1.4 * cm, f"Página {page_number}")
+        canvas_obj.restoreState()
+
+    class FinalPageCanvas(pdf_canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states = []
+
+        def showPage(self):
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total = len(self._saved_page_states)
+            for idx, state in enumerate(self._saved_page_states, start=1):
+                self.__dict__.update(state)
+                _draw_page_chrome(self, idx)
+                if idx == total:
+                    self.setFont("Helvetica-Bold", 11)
+                    self.setFillColor(colors.HexColor("#0E2A44"))
+                    self.drawCentredString(A4[0] / 2, 2.05 * cm, "Assistência Técnica Grupo BAW")
+                super().showPage()
+            super().save()
 
     doc = SimpleDocTemplate(temp_pdf, pagesize=A4,
                             leftMargin=2.5 * cm, rightMargin=2.5 * cm,
                             topMargin=3.4 * cm, bottomMargin=2.5 * cm)
 
-    doc.build(story, onFirstPage=page_chrome, onLaterPages=page_chrome)
+    doc.build(story, canvasmaker=FinalPageCanvas)
 
     template_path_real = template_path if template_path else ""
     if template_path_real and os.path.exists(template_path_real):
@@ -840,17 +865,14 @@ class HorariosTableEditor(ctk.CTkFrame):
         super().__init__(master, **kwargs)
         self._on_change = on_change
 
-        self.tree = ttk.Treeview(self, columns=self.COLUMNS, show="headings", height=6)
+        self.tree = ttk.Treeview(self, columns=self.COLUMNS, show="headings", height=4)
         headings = ("Data", "Início", "Fim", "Intervalos")
         widths = (100, 70, 70, 220)
         for col, heading, width in zip(self.COLUMNS, headings, widths):
             self.tree.heading(col, text=heading)
             self.tree.column(col, width=width, anchor="center" if col != "intervalos" else "w", stretch=True)
-        self.tree.pack(fill="both", expand=True, padx=6, pady=(6, 4))
-        self.tree.bind("<Delete>", lambda _e: self._remove_selected())
-
         controls = ctk.CTkFrame(self, fg_color="transparent")
-        controls.pack(fill="x", padx=6, pady=(0, 6))
+        controls.pack(fill="x", padx=6, pady=(6, 2))
 
         self.inputs = {}
         for label, key, width in (("Data", "data", 90), ("Início", "inicio", 75), ("Fim", "fim", 75), ("Intervalos", "intervalos", 210)):
@@ -862,6 +884,9 @@ class HorariosTableEditor(ctk.CTkFrame):
 
         ctk.CTkButton(controls, text="Adicionar", width=90, command=self._add_row_from_inputs).pack(side="left", padx=(0, 6))
         ctk.CTkButton(controls, text="Remover", width=90, command=self._remove_selected).pack(side="left")
+
+        self.tree.pack(fill="both", expand=True, padx=6, pady=(2, 6))
+        self.tree.bind("<Delete>", lambda _e: self._remove_selected())
 
     def _add_row_from_inputs(self, _event=None):
         raw = " | ".join(self.inputs[key].get().strip() for key in self.COLUMNS)
