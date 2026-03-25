@@ -1,6 +1,7 @@
 import customtkinter as ctk
+import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
-import json, os, re, unicodedata
+import json, os, re, unicodedata, threading, tempfile
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -10,6 +11,8 @@ from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 
 from pypdf import PdfReader, PdfWriter
+import fitz  # pymupdf — instale com: pip install pymupdf
+from PIL import Image as PILImage, ImageTk
 
 CONFIG_FILE = "config.json"
 
@@ -69,7 +72,7 @@ def parse_text(text):
 
     for i in range(1, len(parts), 2):
         title = normalize(parts[i])
-        content = parts[i+1].strip()
+        content = parts[i + 1].strip()
 
         if "descricao" in title:
             sections["descricao"] = content
@@ -85,6 +88,24 @@ def parse_text(text):
             sections["estado"] = content
 
     return sections
+
+
+def limpar_texto(texto):
+    texto = re.sub(r"\*\*(.*?)\*\*", r"\1", texto)
+    texto = re.sub(r"#+\s*", "", texto)
+    texto = re.sub(r"---+", "", texto)
+    texto = re.sub(r"\*(\s*)", "", texto)
+
+    substituicoes = {
+        "\u201c": '"', "\u201d": '"',
+        "\u2018": "'",
+        "\u2013": "-", "\u2014": "-",
+        "\u2022": "-", "\xa0": " ",
+    }
+    for k, v in substituicoes.items():
+        texto = texto.replace(k, v)
+
+    return texto
 
 
 # =========================
@@ -169,23 +190,25 @@ def processar_lista(texto, styles):
 # PDF
 # =========================
 def gerar_pdf(sections, template_path, output_path, fotos=None):
-    temp_pdf = "temp.pdf"
+    import uuid
+    temp_pdf = output_path + f".tmp_{uuid.uuid4().hex[:8]}.pdf"
     fotos = fotos or []
 
     styles = getSampleStyleSheet()
 
     styles.add(ParagraphStyle(name="Titulo",
-        fontSize=18, alignment=1, spaceAfter=6, textColor=colors.HexColor("#0E2A44"), leading=22))
+                              fontSize=18, alignment=1, spaceAfter=6,
+                              textColor=colors.HexColor("#0E2A44"), leading=22))
 
     styles.add(ParagraphStyle(name="Secao",
-        fontSize=12.5, spaceBefore=14, spaceAfter=7, textColor=colors.HexColor("#123A5A"), leading=15))
+                              fontSize=12.5, spaceBefore=14, spaceAfter=7,
+                              textColor=colors.HexColor("#123A5A"), leading=15))
 
     styles.add(ParagraphStyle(name="Body",
-        fontSize=10.5, leading=15, textColor=colors.HexColor("#1F2B37")))
+                              fontSize=10.5, leading=15, textColor=colors.HexColor("#1F2B37")))
 
     story = []
 
-    # TABELA INFO
     info = sections.get("info", {})
     dados = []
 
@@ -212,42 +235,36 @@ def gerar_pdf(sections, template_path, output_path, fotos=None):
             dados.append([label, str(valor).strip()])
 
     if dados:
-        tabela = Table(dados, colWidths=[5*cm, 10*cm])
+        tabela = Table(dados, colWidths=[5 * cm, 10 * cm])
         tabela.setStyle(TableStyle([
-            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#FCFDFE")),
-            ("BOX", (0,0), (-1,-1), 1, colors.HexColor("#C7D4DF")),
-            ("INNERGRID", (0,0), (-1,-1), 0.5, colors.HexColor("#DCE5EC")),
-            ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#E9F0F6")),
-            ("FONTNAME", (0,0), (0,-1), "Helvetica-Bold"),
-            ("LEFTPADDING", (0,0), (-1,-1), 8),
-            ("RIGHTPADDING", (0,0), (-1,-1), 8),
-            ("TOPPADDING", (0,0), (-1,-1), 6),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FCFDFE")),
+            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#C7D4DF")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DCE5EC")),
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E9F0F6")),
+            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ]))
         story.append(tabela)
         story.append(Spacer(1, 15))
 
-    # SEÇÕES
     def add_secao(titulo, conteudo):
         story.append(Paragraph(f"<b>{titulo}</b>", styles["Secao"]))
         story.extend(processar_lista(conteudo, styles))
 
     if sections.get("descricao"):
         add_secao("1 – ESCOPO DO ATENDIMENTO", sections["descricao"])
-
     if sections.get("detalhamento"):
         add_secao("2 – DETALHAMENTO DO PROBLEMA", sections["detalhamento"])
-
     if sections.get("diagnostico"):
         add_secao("3 – DIAGNÓSTICO", sections["diagnostico"])
-
     if sections.get("acoes"):
         add_secao("4 – AÇÕES CORRETIVAS", sections["acoes"])
-
     if sections.get("resultado"):
         add_secao("5 – RESULTADO", sections["resultado"])
-
     if sections.get("estado"):
         add_secao("6 – ESTADO FINAL", sections["estado"])
 
@@ -289,7 +306,6 @@ def gerar_pdf(sections, template_path, output_path, fotos=None):
                 if posicao != len(fotos_bloco):
                     story.append(Spacer(1, 14))
 
-    # CABEÇALHO + RODAPÉ COM NUMERAÇÃO
     def page_chrome(canvas, doc):
         canvas.saveState()
         canvas.setFillColor(colors.HexColor("#F5F8FB"))
@@ -302,19 +318,19 @@ def gerar_pdf(sections, template_path, output_path, fotos=None):
 
         canvas.setFont("Helvetica", 8.8)
         canvas.setFillColor(colors.HexColor("#5B6E7D"))
-        canvas.drawString(2.5*cm, 1.4*cm, "Relatório técnico")
-        canvas.drawRightString(18.5*cm, 1.4*cm, f"Página {doc.page}")
+        canvas.drawString(2.5 * cm, 1.4 * cm, "Relatório técnico")
+        canvas.drawRightString(18.5 * cm, 1.4 * cm, f"Página {doc.page}")
         canvas.restoreState()
 
     doc = SimpleDocTemplate(temp_pdf, pagesize=A4,
-        leftMargin=2.5*cm, rightMargin=2.5*cm,
-        topMargin=3.4*cm, bottomMargin=2.5*cm)
+                            leftMargin=2.5 * cm, rightMargin=2.5 * cm,
+                            topMargin=3.4 * cm, bottomMargin=2.5 * cm)
 
     doc.build(story, onFirstPage=page_chrome, onLaterPages=page_chrome)
 
-    # TEMPLATE EM TODAS AS PÁGINAS
-    if template_path and os.path.exists(template_path):
-        template_reader = PdfReader(template_path)
+    template_path_real = template_path if template_path else ""
+    if template_path_real and os.path.exists(template_path_real):
+        template_reader = PdfReader(template_path_real)
         content_reader = PdfReader(temp_pdf)
         writer = PdfWriter()
 
@@ -326,49 +342,361 @@ def gerar_pdf(sections, template_path, output_path, fotos=None):
 
         with open(output_path, "wb") as f:
             writer.write(f)
-
         os.remove(temp_pdf)
     else:
+        if os.path.exists(output_path):
+            os.remove(output_path)
         os.rename(temp_pdf, output_path)
 
 
 # =========================
-# UI
+# PREVIEW ENGINE
+# =========================
+class PreviewEngine:
+    """Gera imagens de pré-visualização do PDF num thread em segundo plano com debounce."""
+
+    def __init__(self, on_update, debounce_ms=1000):
+        self.on_update = on_update
+        self.debounce_ms = debounce_ms
+        self._timer = None
+        self._lock = threading.Lock()
+        self._current_text = ""
+        self._temp_dir = tempfile.mkdtemp()
+        self._temp_pdf = os.path.join(self._temp_dir, "preview.pdf")
+        self._running = True
+
+    def schedule_update(self, text):
+        with self._lock:
+            self._current_text = text
+            if self._timer is not None:
+                self._timer.cancel()
+            self._timer = threading.Timer(
+                self.debounce_ms / 1000.0, self._generate
+            )
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _generate(self):
+        if not self._running:
+            return
+        with self._lock:
+            text = self._current_text
+
+        import uuid
+        temp_pdf = os.path.join(self._temp_dir, f"preview_{uuid.uuid4().hex[:8]}.pdf")
+        try:
+            texto = limpar_texto(text)
+            sections = parse_text(texto)
+            gerar_pdf(sections, "", temp_pdf)
+
+            doc = fitz.open(temp_pdf)
+            images = []
+            # Matriz aumentada para 2.0 para garantir nitidez ao fazer zoom
+            mat = fitz.Matrix(2.0, 2.0)
+            for page in doc:
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                img = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                images.append(img)
+            doc.close()
+            self.on_update(images, None)
+        except Exception as e:
+            self.on_update(None, str(e))
+        finally:
+            try:
+                if os.path.exists(temp_pdf):
+                    os.remove(temp_pdf)
+            except Exception:
+                pass
+
+    def stop(self):
+        self._running = False
+        if self._timer:
+            self._timer.cancel()
+
+
+# =========================
+# PREVIEW PANEL
+# =========================
+class PreviewPanel(ctk.CTkFrame):
+    """Painel com suporte a Zoom, Scroll Vertical/Horizontal e Pan (arrastar)."""
+
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+
+        self._label_status = ctk.CTkLabel(
+            self, text="A pré-visualização aparecerá aqui...",
+            text_color="#8A9BAD", font=ctk.CTkFont(size=12)
+        )
+        self._label_status.pack(expand=True)
+
+        # Barra de Navegação e Zoom
+        self._nav_frame = ctk.CTkFrame(self, fg_color="transparent")
+
+        self._btn_prev = ctk.CTkButton(self._nav_frame, text="◀", width=36, command=self._prev_page)
+        self._lbl_page = ctk.CTkLabel(self._nav_frame, text="", width=60)
+        self._btn_next = ctk.CTkButton(self._nav_frame, text="▶", width=36, command=self._next_page)
+
+        self._lbl_sep = ctk.CTkLabel(self._nav_frame, text=" | ", text_color="#A0B0C0")
+
+        self._btn_zoom_out = ctk.CTkButton(self._nav_frame, text="−", width=30, command=self._zoom_out)
+        self._lbl_zoom = ctk.CTkLabel(self._nav_frame, text="100%", width=45)
+        self._btn_zoom_in = ctk.CTkButton(self._nav_frame, text="+", width=30, command=self._zoom_in)
+
+        self._btn_prev.pack(side="left", padx=2)
+        self._lbl_page.pack(side="left", padx=2)
+        self._btn_next.pack(side="left", padx=2)
+        self._lbl_sep.pack(side="left", padx=4)
+        self._btn_zoom_out.pack(side="left", padx=2)
+        self._lbl_zoom.pack(side="left", padx=2)
+        self._btn_zoom_in.pack(side="left", padx=2)
+
+        # Área do Canvas
+        self._canvas_container = ctk.CTkFrame(self, fg_color="transparent")
+
+        self._canvas = tk.Canvas(self._canvas_container, bg="#E8EEF3", highlightthickness=0)
+        self._vsb = ctk.CTkScrollbar(self._canvas_container, orientation="vertical", command=self._canvas.yview)
+        self._hsb = ctk.CTkScrollbar(self._canvas_container, orientation="horizontal", command=self._canvas.xview)
+        self._canvas.configure(yscrollcommand=self._vsb.set, xscrollcommand=self._hsb.set)
+
+        self._hsb.pack(side="bottom", fill="x", padx=(0, 16))
+        self._vsb.pack(side="right", fill="y")
+        self._canvas.pack(side="left", fill="both", expand=True)
+
+        # Configuração de Interação (Scroll, Pan e Zoom via Teclado/Mouse)
+        self._canvas.bind("<MouseWheel>", self._on_mousewheel)  # Windows
+        self._canvas.bind("<Button-4>", self._on_mousewheel)  # Linux scroll up
+        self._canvas.bind("<Button-5>", self._on_mousewheel)  # Linux scroll down
+
+        # Pan (Arrastar com botão esquerdo)
+        self._canvas.bind("<Button-1>", self._on_pan_start)
+        self._canvas.bind("<B1-Motion>", self._on_pan_move)
+
+        self._pages = []
+        self._tk_images = []
+        self._current_page = 0
+        self._panel_width = 380
+        self._zoom_factor = 1.0
+
+    def _on_mousewheel(self, event):
+        # Verifica se Ctrl está pressionado para Zoom
+        if event.state & 0x0004:  # Control mask
+            if event.delta > 0 or event.num == 4:
+                self._zoom_in()
+            else:
+                self._zoom_out()
+            return "break"
+
+        # Verifica se Shift está pressionado para Scroll Horizontal
+        if event.state & 0x0001:  # Shift mask
+            if event.delta:
+                self._canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+            elif event.num == 4:
+                self._canvas.xview_scroll(-1, "units")
+            elif event.num == 5:
+                self._canvas.xview_scroll(1, "units")
+        else:
+            # Scroll Vertical padrão
+            if event.delta:
+                self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            elif event.num == 4:
+                self._canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                self._canvas.yview_scroll(1, "units")
+
+    def _on_pan_start(self, event):
+        """Prepara o canvas para arrastar."""
+        self._canvas.scan_mark(event.x, event.y)
+
+    def _on_pan_move(self, event):
+        """Arrasta o conteúdo do canvas conforme o movimento do mouse."""
+        self._canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def update_pages(self, images):
+        self._label_status.pack_forget()
+        self._nav_frame.pack(pady=(8, 2))
+        self._canvas_container.pack(expand=True, fill="both", padx=8, pady=4)
+
+        self._pages = images
+        self._show_page()
+
+    def show_status(self, msg):
+        self._nav_frame.pack_forget()
+        self._canvas_container.pack_forget()
+        self._label_status.configure(text=msg)
+        self._label_status.pack(expand=True)
+
+    def show_generating(self):
+        self.show_status("⏳ A atualizar pré-visualização...")
+
+    def _show_page(self):
+        if not self._pages:
+            return
+        idx = self._current_page
+        img = self._pages[idx]
+
+        base_panel_w = max(self._panel_width - 35, 200)
+        fit_ratio = base_panel_w / img.width
+        final_ratio = fit_ratio * self._zoom_factor
+
+        target_w = int(img.width * final_ratio)
+        target_h = int(img.height * final_ratio)
+
+        resized = img.resize((target_w, target_h), PILImage.LANCZOS)
+        tk_img = ImageTk.PhotoImage(resized)
+        self._tk_images = [tk_img]
+
+        self._canvas.delete("all")
+        self._canvas.create_image(0, 0, anchor="nw", image=tk_img)
+        self._canvas.config(scrollregion=(0, 0, target_w, target_h))
+
+        total = len(self._pages)
+        self._lbl_page.configure(text=f"{idx + 1} / {total}")
+        self._lbl_zoom.configure(text=f"{int(self._zoom_factor * 100)}%")
+
+        self._btn_prev.configure(state="normal" if idx > 0 else "disabled")
+        self._btn_next.configure(state="normal" if idx < total - 1 else "disabled")
+
+    def _prev_page(self):
+        if self._current_page > 0:
+            self._current_page -= 1
+            self._show_page()
+
+    def _next_page(self):
+        if self._current_page < len(self._pages) - 1:
+            self._current_page += 1
+            self._show_page()
+
+    def _zoom_in(self):
+        if self._zoom_factor < 4.0:
+            self._zoom_factor += 0.25
+            self._show_page()
+
+    def _zoom_out(self):
+        if self._zoom_factor > 0.4:
+            self._zoom_factor -= 0.25
+            self._show_page()
+
+    def set_width(self, w):
+        if abs(self._panel_width - w) > 15:
+            self._panel_width = w
+            if self._pages:
+                self._show_page()
+
+
+# =========================
+# UI PRINCIPAL
 # =========================
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
 
         self.title("Gerador de Relatórios")
-        self.geometry("900x600")
+        self.geometry("1280x750")
+        self.minsize(900, 500)
 
         self.config_data = load_config()
 
-        self.label = ctk.CTkLabel(self, text="Template: não selecionado")
-        self.label.pack(pady=10)
+        # ── Barra Superior ────────────────────────────
+        top = ctk.CTkFrame(self, fg_color="transparent")
+        top.pack(fill="x", padx=14, pady=(10, 4))
 
-        ctk.CTkButton(self, text="Selecionar Template",
-                      command=self.select_template).pack()
+        self.label = ctk.CTkLabel(top, text="Template: não selecionado", font=ctk.CTkFont(size=12))
+        self.label.pack(side="left")
 
-        self.text = ctk.CTkTextbox(self, width=800, height=350)
-        self.text.pack(pady=10)
+        ctk.CTkButton(top, text="Selecionar Template", width=160,
+                      command=self.select_template).pack(side="left", padx=10)
 
-        frame = ctk.CTkFrame(self)
-        frame.pack(pady=10)
+        ctk.CTkButton(top, text="Gerar PDF", width=120,
+                      command=self.generate).pack(side="right", padx=4)
 
-        ctk.CTkButton(frame, text="Gerar PDF",
-                      command=self.generate).pack(side="left", padx=10)
+        ctk.CTkButton(top, text="Limpar", width=90,
+                      command=self._limpar).pack(side="right", padx=4)
 
-        ctk.CTkButton(frame, text="Limpar",
-                      command=lambda: self.text.delete("1.0", "end")
-                      ).pack(side="left", padx=10)
+        self._preview_visible = True
+        self._toggle_btn = ctk.CTkButton(
+            top, text="◀ Ocultar prévia", width=130, command=self._toggle_preview
+        )
+        self._toggle_btn.pack(side="right", padx=8)
+
+        # ── Divisão Principal ──────────────────────────
+        self._main = ctk.CTkFrame(self, fg_color="transparent")
+        self._main.pack(fill="both", expand=True, padx=14, pady=(0, 10))
+
+        # Esquerda: Área de texto
+        left = ctk.CTkFrame(self._main, fg_color="transparent")
+        left.pack(side="left", fill="both", expand=True)
+
+        ctk.CTkLabel(left, text="Cole ou digite o texto do relatório:",
+                     font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 4))
+
+        self.text = ctk.CTkTextbox(left, wrap="word",
+                                   font=ctk.CTkFont(family="Courier New", size=12))
+        self.text.pack(fill="both", expand=True)
+        self.text.bind("<<Modified>>", self._on_text_change)
+
+        # Direita: Pré-visualização
+        self._preview_panel = PreviewPanel(
+            self._main,
+            width=420,
+            fg_color=("#E8EEF3", "#1E2C38"),
+            corner_radius=8
+        )
+        self._preview_panel.pack(side="right", fill="both", padx=(10, 0))
+
+        # Motor de pré-visualização
+        self._engine = PreviewEngine(
+            on_update=self._on_preview_ready,
+            debounce_ms=900
+        )
 
         self.update_label()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.bind("<Configure>", self._on_resize)
+
+    def _limpar(self):
+        self.text.delete("1.0", "end")
+        self._preview_panel.show_status("A pré-visualização aparecerá aqui...")
+
+    def _on_text_change(self, event=None):
+        self.text.edit_modified(False)
+        texto = self.text.get("1.0", "end").strip()
+        if not texto:
+            self._preview_panel.show_status("A pré-visualização aparecerá aqui...")
+            return
+        self._preview_panel.show_generating()
+        self._engine.schedule_update(texto)
+
+    def _on_preview_ready(self, images, error):
+        def _update():
+            if error:
+                self._preview_panel.show_status(f"⚠ {error[:80]}")
+            elif images:
+                self._preview_panel.update_pages(images)
+
+        self.after(0, _update)
+
+    def _toggle_preview(self):
+        if self._preview_visible:
+            self._preview_panel.pack_forget()
+            self._toggle_btn.configure(text="▶ Mostrar prévia")
+            self._preview_visible = False
+        else:
+            self._preview_panel.pack(side="right", fill="both", padx=(10, 0))
+            self._toggle_btn.configure(text="◀ Ocultar prévia")
+            self._preview_visible = True
+
+    def _on_resize(self, event=None):
+        w = self._preview_panel.winfo_width()
+        if w > 50:
+            self._preview_panel.set_width(w)
+
+    def _on_close(self):
+        self._engine.stop()
+        self.destroy()
 
     def update_label(self):
         path = self.config_data.get("template_path", "")
-        if path:
-            self.label.configure(text=f"Template: {path}")
+        self.label.configure(text=f"Template: {path}" if path else "Template: não selecionado")
 
     def select_template(self):
         file = filedialog.askopenfilename(filetypes=[("PDF", "*.pdf")])
@@ -379,11 +707,11 @@ class App(ctk.CTk):
 
     def generate(self):
         texto = self.text.get("1.0", "end").strip()
-
         if not texto:
-            messagebox.showerror("Erro", "Cole o texto")
+            messagebox.showerror("Erro", "Cole o texto primeiro")
             return
 
+        texto = limpar_texto(texto)
         sections = parse_text(texto)
 
         save = filedialog.asksaveasfilename(defaultextension=".pdf")
@@ -391,29 +719,17 @@ class App(ctk.CTk):
             return
 
         fotos = []
-        anexar_fotos = messagebox.askyesno("Anexar fotos", "Deseja anexar fotos no PDF?")
-        if anexar_fotos:
+        if messagebox.askyesno("Anexar fotos", "Deseja anexar fotos no PDF?"):
             arquivos = filedialog.askopenfilenames(
-                title="Selecione uma ou mais fotos",
-                filetypes=[
-                    ("Imagens", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"),
-                    ("Todos os arquivos", "*.*"),
-                ],
+                title="Selecione as fotos",
+                filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp")],
             )
             if arquivos:
-                usar_titulos = messagebox.askyesno(
-                    "Título das fotos",
-                    "Deseja definir um título para cada foto?",
-                )
+                usar_titulos = messagebox.askyesno("Títulos", "Definir título para cada foto?")
                 for idx, arquivo in enumerate(arquivos, start=1):
                     titulo = ""
                     if usar_titulos:
-                        nome_arquivo = os.path.basename(arquivo)
-                        titulo = simpledialog.askstring(
-                            "Título da foto",
-                            f"Foto {idx}: {nome_arquivo}\nDigite o título desta foto:",
-                            parent=self,
-                        ) or ""
+                        titulo = simpledialog.askstring("Título", f"Foto {idx} ({os.path.basename(arquivo)}):") or ""
                     fotos.append({"path": arquivo, "title": titulo.strip()})
 
         try:
@@ -423,9 +739,6 @@ class App(ctk.CTk):
             messagebox.showerror("Erro", str(e))
 
 
-# =========================
-# RUN
-# =========================
 if __name__ == "__main__":
     ctk.set_appearance_mode("dark")
     app = App()
