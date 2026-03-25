@@ -514,7 +514,7 @@ def gerar_pdf(
             if comentario:
                 bloco.append(Spacer(1, 4))
                 bloco.append(Paragraph(f"<i>Comentário:</i> {comentario}", styles["Body"]))
-            return KeepTogether(bloco)
+            return bloco
 
         def _flush_half_blocks():
             nonlocal pending_half_blocks
@@ -522,9 +522,15 @@ def gerar_pdf(
                 return
             row = pending_half_blocks
             if len(row) == 1:
-                row = [row[0], Spacer(1, 1)]
+                row = [row[0], ""]
             tbl = Table([row], colWidths=[largura_metade, largura_metade])
-            tbl.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+            tbl.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]))
             story.append(tbl)
             story.append(Spacer(1, 10))
             pending_half_blocks = []
@@ -991,8 +997,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         left.pack(side="left", fill="both", expand=True)
 
         ctk.CTkLabel(left, text="Cole ou digite o texto do relatório:", font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 4))
-        self.text = ctk.CTkTextbox(left, wrap="word", font=ctk.CTkFont(family="Courier New", size=12), height=200)
-        self.text.pack(fill="both", expand=True)
+        self.text = ctk.CTkTextbox(left, wrap="word", font=ctk.CTkFont(family="Courier New", size=12), height=170)
+        self.text.pack(fill="x", expand=False)
         self.text.bind("<<Modified>>", self._on_text_change)
 
         ctk.CTkLabel(left, text="Fotos anexadas:").pack(anchor="w", pady=(8, 4))
