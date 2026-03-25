@@ -633,8 +633,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.text.pack(fill="both", expand=True)
         self.text.bind("<<Modified>>", self._on_text_change)
 
-        self._build_drop_support()
-
         ctk.CTkLabel(left, text="Fotos anexadas:").pack(anchor="w", pady=(8, 4))
         self.fotos_list = ctk.CTkScrollableFrame(left, height=130)
         self.fotos_list.pack(fill="x")
@@ -674,6 +672,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
         self.status_label = ctk.CTkLabel(self, text="Pronto", anchor="w")
         self.status_label.pack(fill="x", padx=14, pady=(0, 8))
+        self._build_drop_support()
 
         self.update_label()
         self._update_template_preview_image()
