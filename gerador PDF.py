@@ -3,7 +3,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import ttk
 import json, os, re, unicodedata, threading, tempfile
-from pathlib import Path
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -35,47 +34,6 @@ SECTION_HEADERS = {
 }
 
 PHOTO_LAYOUT_MODES = ["Dividir página", "Página inteira"]
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
-
-INFO_FIELDS = [
-    ("Equipamento", "equipamento"),
-    ("Fonte", "fonte"),
-    ("Cliente", "cliente"),
-    ("CNC", "cnc"),
-    ("THC", "thc"),
-    ("Fabricante", "fabricante"),
-    ("Contato Cliente", "contato_cliente"),
-    ("Data", "data"),
-    ("Técnico", "tecnico"),
-    ("Acompanhamento remoto", "acompanhamento"),
-    ("Início", "inicio"),
-    ("Fim", "fim"),
-    ("Tempo Atendimento", "tempo_atendimento"),
-    ("Tempo Espera", "tempo_espera"),
-]
-
-INFO_ALIASES = {
-    "equipamento": "equipamento",
-    "fonte": "fonte",
-    "cliente": "cliente",
-    "cnc": "cnc",
-    "thc": "thc",
-    "fabricante": "fabricante",
-    "contato cliente": "contato_cliente",
-    "data": "data",
-    "tecnico": "tecnico",
-    "técnico": "tecnico",
-    "acompanhamento remoto": "acompanhamento",
-    "horario de inicio": "inicio",
-    "horario de término": "fim",
-    "horario de termino": "fim",
-    "inicio": "inicio",
-    "fim": "fim",
-    "tempo do atendimento": "tempo_atendimento",
-    "tempo atendimento": "tempo_atendimento",
-    "tempo em espera": "tempo_espera",
-    "tempo espera": "tempo_espera",
-}
 
 
 # =========================
@@ -113,12 +71,30 @@ def normalize(text):
 def parse_text(text):
     sections = {"info": {}}
 
+    aliases = {
+        "equipamento": "equipamento",
+        "fonte": "fonte",
+        "cliente": "cliente",
+        "cnc": "cnc",
+        "thc": "thc",
+        "fabricante": "fabricante",
+        "contato cliente": "contato_cliente",
+        "data": "data",
+        "tecnico": "tecnico",
+        "técnico": "tecnico",
+        "acompanhamento remoto": "acompanhamento",
+        "horario de inicio": "inicio",
+        "horario de termino": "fim",
+        "tempo do atendimento": "tempo_atendimento",
+        "tempo em espera": "tempo_espera",
+    }
+
     for line in text.splitlines():
         if ":" in line:
             k, v = line.split(":", 1)
             key = normalize(k)
-            if key in INFO_ALIASES:
-                sections["info"][INFO_ALIASES[key]] = v.strip()
+            if key in aliases:
+                sections["info"][aliases[key]] = v.strip()
 
     parts = re.split(r"\n\s*(\d+\s*[–-]\s*.+)", text)
 
@@ -263,36 +239,12 @@ def _extract_section_body(raw_text, section_key):
     return text
 
 
-def _parse_header_info_text(raw_text):
-    info = {}
-    for line in (raw_text or "").splitlines():
-        if ":" not in line:
-            continue
-        label, value = line.split(":", 1)
-        key = INFO_ALIASES.get(normalize(label))
-        if key:
-            parsed = value.strip()
-            if parsed:
-                info[key] = parsed
-    return info
-
-
-def _compose_header_info_text(info):
-    linhas = []
-    info = info or {}
-    for label, key in INFO_FIELDS:
-        value = info.get(key)
-        if _valor_info_preenchido(value):
-            linhas.append(f"{label}: {str(value).strip()}")
-    return "\n".join(linhas).strip()
-
-
 def _compose_full_text_with_sections(base_text, sections):
+    header_pattern = re.compile(r"^\s*\d+\s*[–-]\s*.+$")
     info_lines = []
-    if sections.get("info"):
-        info_lines = _compose_header_info_text(sections["info"]).splitlines()
-    elif base_text:
-        info_lines = _compose_header_info_text(parse_text(base_text).get("info", {})).splitlines()
+    for line in (base_text or "").splitlines():
+        if ":" in line and not header_pattern.match(line.strip()):
+            info_lines.append(line.rstrip())
 
     blocks = []
     if info_lines:
@@ -308,11 +260,10 @@ def _compose_full_text_with_sections(base_text, sections):
     return "\n\n".join(block for block in blocks if block).strip()
 
 
-def gerar_pdf(sections, template_path, output_path, fotos=None, videos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
+def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
     import uuid
     temp_pdf = output_path + f".tmp_{uuid.uuid4().hex[:8]}.pdf"
     fotos = fotos or []
-    videos = videos or []
     foto_cols = 1 if int(foto_cols) == 1 else 2
 
     styles = getSampleStyleSheet()
@@ -333,7 +284,24 @@ def gerar_pdf(sections, template_path, output_path, fotos=None, videos=None, fot
     info = sections.get("info", {})
     dados = []
 
-    for label, key in INFO_FIELDS:
+    campos = [
+        ("Equipamento", "equipamento"),
+        ("Fonte", "fonte"),
+        ("Cliente", "cliente"),
+        ("CNC", "cnc"),
+        ("THC", "thc"),
+        ("Fabricante", "fabricante"),
+        ("Contato Cliente", "contato_cliente"),
+        ("Data", "data"),
+        ("Técnico", "tecnico"),
+        ("Acompanhamento remoto", "acompanhamento"),
+        ("Início", "inicio"),
+        ("Fim", "fim"),
+        ("Tempo Atendimento", "tempo_atendimento"),
+        ("Tempo Espera", "tempo_espera"),
+    ]
+
+    for label, key in campos:
         valor = info.get(key)
         if _valor_info_preenchido(valor):
             dados.append([label, str(valor).strip()])
@@ -429,26 +397,6 @@ def gerar_pdf(sections, template_path, output_path, fotos=None, videos=None, fot
             except Exception:
                 story.append(Paragraph("Não foi possível carregar esta imagem.", styles["Body"]))
 
-    if videos:
-        story.append(PageBreak())
-        story.append(Paragraph("<b>ANEXOS DE VÍDEO</b>", styles["Secao"]))
-        story.append(Spacer(1, 6))
-        for idx, video in enumerate(videos, start=1):
-            titulo = (video.get("title") or f"Vídeo {idx}").strip()
-            fonte = (video.get("source") or "").strip()
-            if not fonte:
-                continue
-            if re.match(r"^https?://", fonte, flags=re.IGNORECASE):
-                uri = fonte
-            else:
-                try:
-                    uri = Path(fonte).expanduser().resolve().as_uri()
-                except Exception:
-                    uri = fonte
-            story.append(Paragraph(f"{idx}. <b>{titulo}</b>", styles["Body"]))
-            story.append(Paragraph(f'<link href="{uri}">Abrir vídeo</link>', styles["Body"]))
-            story.append(Spacer(1, 8))
-
     def page_chrome(canvas, doc):
         canvas.saveState()
         canvas.setFillColor(colors.HexColor("#F5F8FB"))
@@ -506,19 +454,17 @@ class PreviewEngine:
         self._current_text = ""
         self._current_sections = {}
         self._current_fotos = []
-        self._current_videos = []
         self._current_foto_cols = 2
         self._current_foto_h = 8.1
         self._current_section_offsets_cm = {}
         self._temp_dir = tempfile.mkdtemp()
         self._running = True
 
-    def schedule_update(self, text, sections=None, fotos=None, videos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
+    def schedule_update(self, text, sections=None, fotos=None, foto_cols=2, foto_max_height_cm=8.1, section_offsets_cm=None):
         with self._lock:
             self._current_text = text
             self._current_sections = sections or {}
             self._current_fotos = [dict(f) for f in (fotos or [])]
-            self._current_videos = [dict(v) for v in (videos or [])]
             self._current_foto_cols = foto_cols
             self._current_foto_h = foto_max_height_cm
             self._current_section_offsets_cm = section_offsets_cm or {}
@@ -535,7 +481,6 @@ class PreviewEngine:
             text = self._current_text
             sections = self._current_sections
             fotos = self._current_fotos
-            videos = self._current_videos
             foto_cols = self._current_foto_cols
             foto_max_height_cm = self._current_foto_h
             section_offsets_cm = self._current_section_offsets_cm
@@ -551,7 +496,6 @@ class PreviewEngine:
                 "",
                 temp_pdf,
                 fotos=fotos,
-                videos=videos,
                 foto_cols=foto_cols,
                 foto_max_height_cm=foto_max_height_cm,
                 section_offsets_cm=section_offsets_cm,
@@ -745,7 +689,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data.setdefault("last_dir", "")
 
         self.fotos = []
-        self.videos = []
         self._thumb_cache = []
         self._suspend_section_events = False
 
@@ -805,18 +748,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.fotos_list.pack(fill="x")
         ctk.CTkButton(left, text="Adicionar fotos", command=self._add_fotos).pack(anchor="w", pady=(4, 2))
 
-        ctk.CTkLabel(left, text="Vídeos anexados:").pack(anchor="w", pady=(8, 4))
-        self.videos_list = ctk.CTkScrollableFrame(left, height=90)
-        self.videos_list.pack(fill="x")
-        ctk.CTkButton(left, text="Adicionar vídeos", command=self._add_videos).pack(anchor="w", pady=(4, 2))
-
         ctk.CTkLabel(left, text="Seções extraídas (editáveis):").pack(anchor="w", pady=(8, 4))
         self.sections_tabs = ttk.Notebook(left)
         self.sections_tabs.pack(fill="both", expand=True)
         self.section_widgets = {}
         self.section_offset_vars = {}
         nomes = {
-            "cabecalho": "Cabeçalho",
             "descricao": "Escopo",
             "detalhamento": "Detalhamento",
             "diagnostico": "Diagnóstico",
@@ -824,27 +761,26 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             "resultado": "Resultado",
             "estado": "Estado final",
         }
-        for key in ["cabecalho", *SECOES_EDITAVEIS]:
+        for key in SECOES_EDITAVEIS:
             frame = ctk.CTkFrame(self.sections_tabs)
-            if key != "cabecalho":
-                controls = ctk.CTkFrame(frame, fg_color="transparent")
-                controls.pack(fill="x", padx=6, pady=(6, 0))
-                ctk.CTkLabel(controls, text="Deslocamento antes do tópico (cm):").pack(side="left", padx=(0, 4))
-                offset_var = tk.StringVar(value="0.0")
-                offset = ctk.CTkOptionMenu(
-                    controls,
-                    variable=offset_var,
-                    values=["0.0", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
-                    width=90,
-                    command=lambda _v, k=key: self._on_offset_change(k),
-                )
-                offset.pack(side="left")
-                self.section_offset_vars[key] = offset_var
+            controls = ctk.CTkFrame(frame, fg_color="transparent")
+            controls.pack(fill="x", padx=6, pady=(6, 0))
+            ctk.CTkLabel(controls, text="Deslocamento antes do tópico (cm):").pack(side="left", padx=(0, 4))
+            offset_var = tk.StringVar(value="0.0")
+            offset = ctk.CTkOptionMenu(
+                controls,
+                variable=offset_var,
+                values=["0.0", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
+                width=90,
+                command=lambda _v, k=key: self._on_offset_change(k),
+            )
+            offset.pack(side="left")
             box = ctk.CTkTextbox(frame, wrap="word", height=110)
             box.pack(fill="both", expand=True, padx=6, pady=6)
             box.bind("<<Modified>>", self._on_section_text_edit)
             self.sections_tabs.add(frame, text=nomes[key])
             self.section_widgets[key] = box
+            self.section_offset_vars[key] = offset_var
 
         right = ctk.CTkFrame(self._main, fg_color="transparent")
         right.pack(side="right", fill="both", padx=(10, 0))
@@ -858,9 +794,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.status_label = ctk.CTkLabel(self, text="Pronto", anchor="w")
         self.status_label.pack(fill="x", padx=14, pady=(0, 8))
         self._build_drop_support()
-        self._render_fotos_list()
-        self._render_videos_list()
-        self._refresh_sections_panel()
 
         self.update_label()
         self._update_template_preview_image()
@@ -928,10 +861,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _get_sections_from_ui(self):
         texto = limpar_texto(self.text.get("1.0", "end").strip())
         sections = parse_text(texto)
-        sections["info"] = _parse_header_info_text(self.section_widgets["cabecalho"].get("1.0", "end"))
         for key, box in self.section_widgets.items():
-            if key == "cabecalho":
-                continue
             val = _extract_section_body(box.get("1.0", "end"), key)
             if val:
                 sections[key] = val
@@ -946,12 +876,9 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         try:
             for key, box in self.section_widgets.items():
                 box.delete("1.0", "end")
-                if key == "cabecalho":
-                    composed = _compose_header_info_text(sections.get("info", {}))
-                else:
-                    header = SECTION_HEADERS.get(key, key.title())
-                    body = sections.get(key, "").strip()
-                    composed = f"{header}\n{body}".strip()
+                header = SECTION_HEADERS.get(key, key.title())
+                body = sections.get(key, "").strip()
+                composed = f"{header}\n{body}".strip()
                 box.insert("1.0", composed)
                 box.edit_modified(False)
         finally:
@@ -963,9 +890,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         for var in self.section_offset_vars.values():
             var.set("0.0")
         self.fotos = []
-        self.videos = []
         self._render_fotos_list()
-        self._render_videos_list()
         self._preview_panel.show_status("A pré-visualização aparecerá aqui...")
         self._set_status("Campos limpos.")
 
@@ -987,7 +912,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def force_preview_update(self):
         texto = self.text.get("1.0", "end").strip()
         sections = self._get_sections_from_ui() if texto else {}
-        if not texto and not self.fotos and not self.videos:
+        if not texto and not self.fotos:
             self._preview_panel.show_status("A pré-visualização aparecerá aqui...")
             return
         self._preview_panel.show_generating()
@@ -997,7 +922,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             preview_text,
             sections=sections,
             fotos=self.fotos,
-            videos=self.videos,
             foto_cols=int(self.foto_cols_var.get()),
             foto_max_height_cm=float(self.foto_h_var.get()),
             section_offsets_cm=self._get_section_offsets_cm(),
@@ -1100,25 +1024,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         if self.chk_auto_var.get():
             self.force_preview_update()
 
-    def _add_videos(self):
-        arquivos = filedialog.askopenfilenames(
-            initialdir=self._pick_initial_dir(),
-            title="Selecione os vídeos",
-            filetypes=[("Vídeos", "*.mp4 *.mov *.avi *.mkv *.webm *.m4v"), ("Todos", "*.*")],
-        )
-        if not arquivos:
-            return
-        self._remember_dir(arquivos[0])
-        for arquivo in arquivos:
-            ext = Path(arquivo).suffix.lower()
-            if ext not in VIDEO_EXTENSIONS:
-                continue
-            self.videos.append({"source": arquivo, "title": Path(arquivo).name})
-        self._render_videos_list()
-        self._set_status(f"{len(arquivos)} vídeo(s) adicionado(s).")
-        if self.chk_auto_var.get():
-            self.force_preview_update()
-
     def _move_foto(self, idx, delta):
         novo = idx + delta
         if novo < 0 or novo >= len(self.fotos):
@@ -1131,12 +1036,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _remove_foto(self, idx):
         self.fotos.pop(idx)
         self._render_fotos_list()
-        if self.chk_auto_var.get():
-            self.force_preview_update()
-
-    def _remove_video(self, idx):
-        self.videos.pop(idx)
-        self._render_videos_list()
         if self.chk_auto_var.get():
             self.force_preview_update()
 
@@ -1191,7 +1090,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             width_menu = ctk.CTkOptionMenu(
                 row,
                 variable=width_var,
-                values=["70%", "80%", "90%", "100%", "110%", "120%", "130%"],
+                values=["70%", "80%", "90%", "100%", "110%", "120%", "130%", "150%", "170%", "200%"],
                 width=78,
                 command=lambda v, i=idx: self._set_foto_width(i, v),
             )
@@ -1200,29 +1099,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             ctk.CTkButton(row, text="↑", width=28, command=lambda i=idx: self._move_foto(i, -1)).pack(side="left", padx=1)
             ctk.CTkButton(row, text="↓", width=28, command=lambda i=idx: self._move_foto(i, 1)).pack(side="left", padx=1)
             ctk.CTkButton(row, text="✕", width=28, command=lambda i=idx: self._remove_foto(i)).pack(side="left", padx=1)
-
-    def _render_videos_list(self):
-        for w in self.videos_list.winfo_children():
-            w.destroy()
-        if not self.videos:
-            ctk.CTkLabel(self.videos_list, text="Nenhum vídeo anexado.", text_color="#7E8D9A").pack(anchor="w", padx=4, pady=4)
-            return
-
-        for idx, video in enumerate(self.videos):
-            row = ctk.CTkFrame(self.videos_list)
-            row.pack(fill="x", padx=2, pady=2)
-
-            title_entry = ctk.CTkEntry(row)
-            title_entry.insert(0, video.get("title", ""))
-            title_entry.pack(side="left", fill="x", expand=True, padx=4)
-            title_entry.bind("<KeyRelease>", lambda e, i=idx, ent=title_entry: self._set_video_title(i, ent.get()))
-
-            src_entry = ctk.CTkEntry(row)
-            src_entry.insert(0, video.get("source", ""))
-            src_entry.pack(side="left", fill="x", expand=True, padx=4)
-            src_entry.bind("<KeyRelease>", lambda e, i=idx, ent=src_entry: self._set_video_source(i, ent.get()))
-
-            ctk.CTkButton(row, text="✕", width=28, command=lambda i=idx: self._remove_video(i)).pack(side="left", padx=1)
 
     def _set_foto_title(self, idx, title):
         if 0 <= idx < len(self.fotos):
@@ -1254,18 +1130,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             if self.chk_auto_var.get():
                 self.force_preview_update()
 
-    def _set_video_title(self, idx, title):
-        if 0 <= idx < len(self.videos):
-            self.videos[idx]["title"] = title.strip()
-            if self.chk_auto_var.get():
-                self.force_preview_update()
-
-    def _set_video_source(self, idx, source):
-        if 0 <= idx < len(self.videos):
-            self.videos[idx]["source"] = source.strip()
-            if self.chk_auto_var.get():
-                self.force_preview_update()
-
     def generate(self):
         texto = self.text.get("1.0", "end").strip()
         if not texto:
@@ -1291,7 +1155,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 self.config_data.get("template_path", ""),
                 save,
                 fotos=self.fotos,
-                videos=self.videos,
                 foto_cols=int(self.foto_cols_var.get()),
                 foto_max_height_cm=float(self.foto_h_var.get()),
                 section_offsets_cm=self._get_section_offsets_cm(),
