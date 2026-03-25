@@ -373,6 +373,15 @@ def _parse_horarios_table(raw_text):
     return linhas
 
 
+def _compose_horarios_table_text(rows=None):
+    rows = rows or []
+    lines = ["Data | Início | Fim | Intervalos"]
+    for row in rows:
+        date, inicio, fim, intervalos = (list(row) + ["", "", "", ""])[:4]
+        lines.append(f"{date} | {inicio} | {fim} | {intervalos}")
+    return "\n".join(lines)
+
+
 def gerar_pdf(
     sections,
     template_path,
@@ -526,23 +535,8 @@ def gerar_pdf(
         ]))
         story.append(tabela_horarios)
 
-    class _BottomNote(Flowable):
-        def __init__(self, text, style):
-            super().__init__()
-            self._text = text
-            self._style = style
-
-        def wrap(self, *_args):
-            return 0, 0
-
-        def draw(self):
-            paragraph = Paragraph(self._text, self._style)
-            width = A4[0] - (5 * cm)
-            w, h = paragraph.wrap(width, 3 * cm)
-            y = 2.9 * cm
-            paragraph.drawOn(self.canv, (A4[0] - w) / 2, y)
-
-    story.append(_BottomNote("<b>Assistência Técnica Grupo BAW</b>", styles["Titulo"]))
+    story.append(Spacer(1, 14))
+    story.append(Paragraph("<b>Assistência Técnica Grupo BAW</b>", styles["Titulo"]))
 
     def page_chrome(canvas, doc):
         canvas.saveState()
@@ -839,6 +833,69 @@ class PreviewPanel(ctk.CTkFrame):
                 self._show_page()
 
 
+class HorariosTableEditor(ctk.CTkFrame):
+    COLUMNS = ("data", "inicio", "fim", "intervalos")
+
+    def __init__(self, master, on_change=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self._on_change = on_change
+
+        self.tree = ttk.Treeview(self, columns=self.COLUMNS, show="headings", height=6)
+        headings = ("Data", "Início", "Fim", "Intervalos")
+        widths = (100, 70, 70, 220)
+        for col, heading, width in zip(self.COLUMNS, headings, widths):
+            self.tree.heading(col, text=heading)
+            self.tree.column(col, width=width, anchor="center" if col != "intervalos" else "w", stretch=True)
+        self.tree.pack(fill="both", expand=True, padx=6, pady=(6, 4))
+        self.tree.bind("<Delete>", lambda _e: self._remove_selected())
+
+        controls = ctk.CTkFrame(self, fg_color="transparent")
+        controls.pack(fill="x", padx=6, pady=(0, 6))
+
+        self.inputs = {}
+        for label, key, width in (("Data", "data", 90), ("Início", "inicio", 75), ("Fim", "fim", 75), ("Intervalos", "intervalos", 210)):
+            ctk.CTkLabel(controls, text=label).pack(side="left", padx=(0, 4))
+            entry = ctk.CTkEntry(controls, width=width, placeholder_text="dd/mm/aaaa" if key == "data" else "")
+            entry.pack(side="left", padx=(0, 8))
+            entry.bind("<Return>", self._add_row_from_inputs)
+            self.inputs[key] = entry
+
+        ctk.CTkButton(controls, text="Adicionar", width=90, command=self._add_row_from_inputs).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(controls, text="Remover", width=90, command=self._remove_selected).pack(side="left")
+
+    def _add_row_from_inputs(self, _event=None):
+        raw = " | ".join(self.inputs[key].get().strip() for key in self.COLUMNS)
+        parsed = _parse_horarios_table(raw)
+        if not parsed:
+            return
+        self.tree.insert("", "end", values=parsed[0])
+        for entry in self.inputs.values():
+            entry.delete(0, "end")
+        if self._on_change:
+            self._on_change()
+
+    def _remove_selected(self):
+        selected = self.tree.selection()
+        if not selected:
+            return
+        for item in selected:
+            self.tree.delete(item)
+        if self._on_change:
+            self._on_change()
+
+    def get_rows(self):
+        return [list(self.tree.item(item, "values")) for item in self.tree.get_children("")]
+
+    def set_rows(self, rows):
+        self.clear()
+        for row in rows or []:
+            self.tree.insert("", "end", values=(list(row) + ["", "", "", ""])[:4])
+
+    def clear(self):
+        for item in self.tree.get_children(""):
+            self.tree.delete(item)
+
+
 class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -865,7 +922,10 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.label.pack(side="left")
 
         ctk.CTkButton(top, text="Selecionar Template", width=160, command=self.select_template).pack(side="left", padx=8)
-        ctk.CTkButton(top, text="Login técnico", width=120, command=self._change_tecnico_login).pack(side="left", padx=4)
+        self._tecnico_btn = ctk.CTkButton(top, text="Trocar técnico", width=120, command=self._change_tecnico_login)
+        self._tecnico_btn.pack(side="left", padx=4)
+        self._tecnico_label = ctk.CTkLabel(top, text="", text_color="#7D93A8")
+        self._tecnico_label.pack(side="left", padx=(4, 8))
         ctk.CTkButton(top, text="Atualizar prévia", width=130, command=self.force_preview_update).pack(side="left", padx=4)
 
         self.chk_auto_var = tk.BooleanVar(value=bool(self.config_data.get("preview_auto", True)))
@@ -939,7 +999,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 if key == "horarios":
                     ctk.CTkLabel(
                         controls,
-                        text="Use uma linha por dia: Data | Início | Fim | Intervalos",
+                        text="Preencha a tabela abaixo (mesmo layout do PDF).",
                         text_color="#8EA1B2",
                     ).pack(side="left", padx=(0, 4))
                 else:
@@ -954,9 +1014,13 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                     )
                     offset.pack(side="left")
                     self.section_offset_vars[key] = offset_var
-            box = ctk.CTkTextbox(frame, wrap="word", height=110)
-            box.pack(fill="both", expand=True, padx=6, pady=6)
-            box.bind("<<Modified>>", self._on_section_text_edit)
+            if key == "horarios":
+                box = HorariosTableEditor(frame, on_change=self._on_horarios_table_change)
+                box.pack(fill="both", expand=True, padx=6, pady=6)
+            else:
+                box = ctk.CTkTextbox(frame, wrap="word", height=110)
+                box.pack(fill="both", expand=True, padx=6, pady=6)
+                box.bind("<<Modified>>", self._on_section_text_edit)
             self.sections_tabs.add(frame, text=nomes[key])
             self.section_widgets[key] = box
 
@@ -980,6 +1044,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.bind("<Configure>", self._on_resize)
+        self._update_tecnico_label()
 
         self.bind("<Control-g>", lambda e: self.generate())
         self.bind("<Control-G>", lambda e: self.generate())
@@ -1009,9 +1074,14 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             return
         self.config_data["default_tecnico"] = nome.strip()
         save_config(self.config_data)
+        self._update_tecnico_label()
         self._refresh_sections_panel()
         if self.chk_auto_var.get():
             self.force_preview_update()
+
+    def _update_tecnico_label(self):
+        tecnico = str(self.config_data.get("default_tecnico", "")).strip() or "(não definido)"
+        self._tecnico_label.configure(text=f"Técnico atual: {tecnico}")
 
     def _build_drop_support(self):
         if not (TkinterDnD and DND_FILES):
@@ -1053,6 +1123,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         if self.chk_auto_var.get():
             self.force_preview_update()
 
+    def _on_horarios_table_change(self):
+        if self._suspend_section_events:
+            return
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
     def _get_section_offsets_cm(self):
         return {key: _coerce_offset_cm(var.get()) for key, var in self.section_offset_vars.items()}
 
@@ -1075,8 +1151,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         return sections
 
     def _get_horarios_from_ui(self):
-        horarios_texto = self.section_widgets["horarios"].get("1.0", "end")
-        return _parse_horarios_table(horarios_texto)
+        return self.section_widgets["horarios"].get_rows()
 
     def _refresh_sections_panel(self):
         texto = self.text.get("1.0", "end").strip()
@@ -1089,17 +1164,20 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self._suspend_section_events = True
         try:
             for key, box in self.section_widgets.items():
-                box.delete("1.0", "end")
                 if key == "cabecalho":
+                    box.delete("1.0", "end")
                     composed = _compose_info_text(sections.get("info", {}), include_required_empty=True)
+                    box.insert("1.0", composed)
+                    box.edit_modified(False)
                 elif key == "horarios":
-                    composed = "Data Início Fim Intervalos\n"
+                    box.set_rows([])
                 else:
+                    box.delete("1.0", "end")
                     header = SECTION_HEADERS.get(key, key.title())
                     body = sections.get(key, "").strip()
                     composed = f"{header}\n{body}".strip()
-                box.insert("1.0", composed)
-                box.edit_modified(False)
+                    box.insert("1.0", composed)
+                    box.edit_modified(False)
         finally:
             self._suspend_section_events = False
 
