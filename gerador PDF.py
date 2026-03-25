@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox
+from tkinter import ttk
 import json, os, re, unicodedata, threading, tempfile
 
 from reportlab.lib.pagesizes import A4
@@ -14,22 +15,38 @@ from pypdf import PdfReader, PdfWriter
 import fitz  # pymupdf — instale com: pip install pymupdf
 from PIL import Image as PILImage, ImageTk
 
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except Exception:
+    DND_FILES = None
+    TkinterDnD = None
+
 CONFIG_FILE = "config.json"
+SECOES_EDITAVEIS = ["descricao", "detalhamento", "diagnostico", "acoes", "resultado", "estado"]
 
 
 # =========================
 # CONFIG
 # =========================
 def load_config():
+    defaults = {
+        "template_path": "",
+        "last_dir": "",
+        "preview_visible": True,
+        "preview_auto": True,
+        "zoom_factor": 1.0,
+        "window_geometry": "1280x750",
+    }
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
-    return {"template_path": ""}
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            defaults.update(data)
+    return defaults
 
 
 def save_config(config):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
 
 
 # =========================
@@ -189,10 +206,11 @@ def processar_lista(texto, styles):
 # =========================
 # PDF
 # =========================
-def gerar_pdf(sections, template_path, output_path, fotos=None):
+def gerar_pdf(sections, template_path, output_path, fotos=None, foto_cols=2, foto_max_height_cm=8.1):
     import uuid
     temp_pdf = output_path + f".tmp_{uuid.uuid4().hex[:8]}.pdf"
     fotos = fotos or []
+    foto_cols = 1 if int(foto_cols) == 1 else 2
 
     styles = getSampleStyleSheet()
 
@@ -274,37 +292,36 @@ def gerar_pdf(sections, template_path, output_path, fotos=None):
         story.append(Spacer(1, 6))
 
         largura_util = A4[0] - (5 * cm)
-        largura_max = largura_util - (1 * cm)
-        altura_max = 8.1 * cm
+        espacamento = 0.8 * cm
+        colunas = 1 if foto_cols == 1 else 2
+        largura_max = largura_util if colunas == 1 else ((largura_util - espacamento) / 2)
+        altura_max = float(foto_max_height_cm) * cm
 
-        for bloco in range(0, len(fotos), 2):
-            fotos_bloco = fotos[bloco:bloco + 2]
-            if bloco > 0:
-                story.append(PageBreak())
-
-            for posicao, foto in enumerate(fotos_bloco, start=1):
-                idx = bloco + posicao
-                caminho = foto.get("path")
-                titulo = foto.get("title") or f"Foto {idx}"
-
-                story.append(Paragraph(f"<b>{idx}. {titulo}</b>", styles["Body"]))
-                story.append(Spacer(1, 4))
-
-                try:
-                    img_reader = ImageReader(caminho)
-                    largura_original, altura_original = img_reader.getSize()
-                    escala = min(largura_max / largura_original, altura_max / altura_original)
-                    largura = largura_original * escala
-                    altura = altura_original * escala
-
-                    imagem = Image(caminho, width=largura, height=altura)
-                    imagem.hAlign = "CENTER"
-                    story.append(imagem)
-                except Exception:
-                    story.append(Paragraph("Não foi possível carregar esta imagem.", styles["Body"]))
-
-                if posicao != len(fotos_bloco):
+        for idx, foto in enumerate(fotos, start=1):
+            if idx > 1:
+                if colunas == 1 or (idx - 1) % 2 == 0:
+                    story.append(PageBreak())
+                else:
                     story.append(Spacer(1, 14))
+
+            caminho = foto.get("path")
+            titulo = foto.get("title") or f"Foto {idx}"
+
+            story.append(Paragraph(f"<b>{idx}. {titulo}</b>", styles["Body"]))
+            story.append(Spacer(1, 4))
+
+            try:
+                img_reader = ImageReader(caminho)
+                largura_original, altura_original = img_reader.getSize()
+                escala = min(largura_max / largura_original, altura_max / altura_original)
+                largura = largura_original * escala
+                altura = altura_original * escala
+
+                imagem = Image(caminho, width=largura, height=altura)
+                imagem.hAlign = "CENTER"
+                story.append(imagem)
+            except Exception:
+                story.append(Paragraph("Não foi possível carregar esta imagem.", styles["Body"]))
 
     def page_chrome(canvas, doc):
         canvas.saveState()
@@ -362,7 +379,6 @@ class PreviewEngine:
         self._lock = threading.Lock()
         self._current_text = ""
         self._temp_dir = tempfile.mkdtemp()
-        self._temp_pdf = os.path.join(self._temp_dir, "preview.pdf")
         self._running = True
 
     def schedule_update(self, text):
@@ -370,9 +386,7 @@ class PreviewEngine:
             self._current_text = text
             if self._timer is not None:
                 self._timer.cancel()
-            self._timer = threading.Timer(
-                self.debounce_ms / 1000.0, self._generate
-            )
+            self._timer = threading.Timer(self.debounce_ms / 1000.0, self._generate)
             self._timer.daemon = True
             self._timer.start()
 
@@ -391,7 +405,6 @@ class PreviewEngine:
 
             doc = fitz.open(temp_pdf)
             images = []
-            # Matriz aumentada para 2.0 para garantir nitidez ao fazer zoom
             mat = fitz.Matrix(2.0, 2.0)
             for page in doc:
                 pix = page.get_pixmap(matrix=mat, alpha=False)
@@ -414,30 +427,18 @@ class PreviewEngine:
             self._timer.cancel()
 
 
-# =========================
-# PREVIEW PANEL
-# =========================
 class PreviewPanel(ctk.CTkFrame):
-    """Painel com suporte a Zoom, Scroll Vertical/Horizontal e Pan (arrastar)."""
-
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
 
-        self._label_status = ctk.CTkLabel(
-            self, text="A pré-visualização aparecerá aqui...",
-            text_color="#8A9BAD", font=ctk.CTkFont(size=12)
-        )
+        self._label_status = ctk.CTkLabel(self, text="A pré-visualização aparecerá aqui...", text_color="#8A9BAD")
         self._label_status.pack(expand=True)
 
-        # Barra de Navegação e Zoom
         self._nav_frame = ctk.CTkFrame(self, fg_color="transparent")
-
         self._btn_prev = ctk.CTkButton(self._nav_frame, text="◀", width=36, command=self._prev_page)
         self._lbl_page = ctk.CTkLabel(self._nav_frame, text="", width=60)
         self._btn_next = ctk.CTkButton(self._nav_frame, text="▶", width=36, command=self._next_page)
-
         self._lbl_sep = ctk.CTkLabel(self._nav_frame, text=" | ", text_color="#A0B0C0")
-
         self._btn_zoom_out = ctk.CTkButton(self._nav_frame, text="−", width=30, command=self._zoom_out)
         self._lbl_zoom = ctk.CTkLabel(self._nav_frame, text="100%", width=45)
         self._btn_zoom_in = ctk.CTkButton(self._nav_frame, text="+", width=30, command=self._zoom_in)
@@ -450,9 +451,7 @@ class PreviewPanel(ctk.CTkFrame):
         self._lbl_zoom.pack(side="left", padx=2)
         self._btn_zoom_in.pack(side="left", padx=2)
 
-        # Área do Canvas
         self._canvas_container = ctk.CTkFrame(self, fg_color="transparent")
-
         self._canvas = tk.Canvas(self._canvas_container, bg="#E8EEF3", highlightthickness=0)
         self._vsb = ctk.CTkScrollbar(self._canvas_container, orientation="vertical", command=self._canvas.yview)
         self._hsb = ctk.CTkScrollbar(self._canvas_container, orientation="horizontal", command=self._canvas.xview)
@@ -462,12 +461,9 @@ class PreviewPanel(ctk.CTkFrame):
         self._vsb.pack(side="right", fill="y")
         self._canvas.pack(side="left", fill="both", expand=True)
 
-        # Configuração de Interação (Scroll, Pan e Zoom via Teclado/Mouse)
-        self._canvas.bind("<MouseWheel>", self._on_mousewheel)  # Windows
-        self._canvas.bind("<Button-4>", self._on_mousewheel)  # Linux scroll up
-        self._canvas.bind("<Button-5>", self._on_mousewheel)  # Linux scroll down
-
-        # Pan (Arrastar com botão esquerdo)
+        self._canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self._canvas.bind("<Button-4>", self._on_mousewheel)
+        self._canvas.bind("<Button-5>", self._on_mousewheel)
         self._canvas.bind("<Button-1>", self._on_pan_start)
         self._canvas.bind("<B1-Motion>", self._on_pan_move)
 
@@ -477,17 +473,23 @@ class PreviewPanel(ctk.CTkFrame):
         self._panel_width = 380
         self._zoom_factor = 1.0
 
+    def get_zoom_factor(self):
+        return self._zoom_factor
+
+    def set_zoom_factor(self, factor):
+        self._zoom_factor = max(0.4, min(4.0, float(factor)))
+        if self._pages:
+            self._show_page()
+
     def _on_mousewheel(self, event):
-        # Verifica se Ctrl está pressionado para Zoom
-        if event.state & 0x0004:  # Control mask
+        if event.state & 0x0004:
             if event.delta > 0 or event.num == 4:
                 self._zoom_in()
             else:
                 self._zoom_out()
             return "break"
 
-        # Verifica se Shift está pressionado para Scroll Horizontal
-        if event.state & 0x0001:  # Shift mask
+        if event.state & 0x0001:
             if event.delta:
                 self._canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
             elif event.num == 4:
@@ -495,7 +497,6 @@ class PreviewPanel(ctk.CTkFrame):
             elif event.num == 5:
                 self._canvas.xview_scroll(1, "units")
         else:
-            # Scroll Vertical padrão
             if event.delta:
                 self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
             elif event.num == 4:
@@ -504,18 +505,15 @@ class PreviewPanel(ctk.CTkFrame):
                 self._canvas.yview_scroll(1, "units")
 
     def _on_pan_start(self, event):
-        """Prepara o canvas para arrastar."""
         self._canvas.scan_mark(event.x, event.y)
 
     def _on_pan_move(self, event):
-        """Arrasta o conteúdo do canvas conforme o movimento do mouse."""
         self._canvas.scan_dragto(event.x, event.y, gain=1)
 
     def update_pages(self, images):
         self._label_status.pack_forget()
         self._nav_frame.pack(pady=(8, 2))
         self._canvas_container.pack(expand=True, fill="both", padx=8, pady=4)
-
         self._pages = images
         self._show_page()
 
@@ -567,14 +565,10 @@ class PreviewPanel(ctk.CTkFrame):
             self._show_page()
 
     def _zoom_in(self):
-        if self._zoom_factor < 4.0:
-            self._zoom_factor += 0.25
-            self._show_page()
+        self.set_zoom_factor(self._zoom_factor + 0.25)
 
     def _zoom_out(self):
-        if self._zoom_factor > 0.4:
-            self._zoom_factor -= 0.25
-            self._show_page()
+        self.set_zoom_factor(self._zoom_factor - 0.25)
 
     def set_width(self, w):
         if abs(self._panel_width - w) > 15:
@@ -583,107 +577,239 @@ class PreviewPanel(ctk.CTkFrame):
                 self._show_page()
 
 
-# =========================
-# UI PRINCIPAL
-# =========================
-class App(ctk.CTk):
+class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def __init__(self):
         super().__init__()
 
         self.title("Gerador de Relatórios")
-        self.geometry("1280x750")
-        self.minsize(900, 500)
-
         self.config_data = load_config()
+        self.geometry(self.config_data.get("window_geometry", "1280x750"))
+        self.minsize(980, 600)
+        self.config_data.setdefault("preview_visible", True)
+        self.config_data.setdefault("preview_auto", True)
+        self.config_data.setdefault("zoom_factor", 1.0)
+        self.config_data.setdefault("last_dir", "")
 
-        # ── Barra Superior ────────────────────────────
+        self.fotos = []
+        self._thumb_cache = []
+        self._suspend_section_events = False
+
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=14, pady=(10, 4))
 
         self.label = ctk.CTkLabel(top, text="Template: não selecionado", font=ctk.CTkFont(size=12))
         self.label.pack(side="left")
 
-        ctk.CTkButton(top, text="Selecionar Template", width=160,
-                      command=self.select_template).pack(side="left", padx=10)
+        ctk.CTkButton(top, text="Selecionar Template", width=160, command=self.select_template).pack(side="left", padx=8)
+        ctk.CTkButton(top, text="Atualizar prévia", width=130, command=self.force_preview_update).pack(side="left", padx=4)
 
-        ctk.CTkButton(top, text="Gerar PDF", width=120,
-                      command=self.generate).pack(side="right", padx=4)
+        self.chk_auto_var = tk.BooleanVar(value=bool(self.config_data.get("preview_auto", True)))
+        ctk.CTkCheckBox(top, text="Atualizar prévia automaticamente", variable=self.chk_auto_var, command=self._on_auto_preview_toggle).pack(side="left", padx=10)
 
-        ctk.CTkButton(top, text="Limpar", width=90,
-                      command=self._limpar).pack(side="right", padx=4)
+        ctk.CTkButton(top, text="Gerar PDF", width=120, command=self.generate).pack(side="right", padx=4)
+        ctk.CTkButton(top, text="Limpar", width=90, command=self._limpar).pack(side="right", padx=4)
 
-        self._preview_visible = True
-        self._toggle_btn = ctk.CTkButton(
-            top, text="◀ Ocultar prévia", width=130, command=self._toggle_preview
-        )
+        self._preview_visible = bool(self.config_data.get("preview_visible", True))
+        self._toggle_btn = ctk.CTkButton(top, text="◀ Ocultar prévia", width=130, command=self._toggle_preview)
         self._toggle_btn.pack(side="right", padx=8)
 
-        # ── Divisão Principal ──────────────────────────
-        self._main = ctk.CTkFrame(self, fg_color="transparent")
-        self._main.pack(fill="both", expand=True, padx=14, pady=(0, 10))
+        options = ctk.CTkFrame(self, fg_color="transparent")
+        options.pack(fill="x", padx=14, pady=(0, 6))
+        ctk.CTkLabel(options, text="Layout das fotos:").pack(side="left")
+        self.foto_cols_var = tk.StringVar(value="2")
+        ctk.CTkOptionMenu(options, variable=self.foto_cols_var, values=["1", "2"], width=80).pack(side="left", padx=6)
+        ctk.CTkLabel(options, text="colunas | altura máx (cm):").pack(side="left", padx=(8, 4))
+        self.foto_h_var = tk.StringVar(value="8.1")
+        ctk.CTkOptionMenu(options, variable=self.foto_h_var, values=["6.0", "7.0", "8.1", "9.5", "11.0"], width=90).pack(side="left")
 
-        # Esquerda: Área de texto
+        self._main = ctk.CTkFrame(self, fg_color="transparent")
+        self._main.pack(fill="both", expand=True, padx=14, pady=(0, 6))
+
         left = ctk.CTkFrame(self._main, fg_color="transparent")
         left.pack(side="left", fill="both", expand=True)
 
-        ctk.CTkLabel(left, text="Cole ou digite o texto do relatório:",
-                     font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 4))
-
-        self.text = ctk.CTkTextbox(left, wrap="word",
-                                   font=ctk.CTkFont(family="Courier New", size=12))
+        ctk.CTkLabel(left, text="Cole ou digite o texto do relatório:", font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 4))
+        self.text = ctk.CTkTextbox(left, wrap="word", font=ctk.CTkFont(family="Courier New", size=12), height=200)
         self.text.pack(fill="both", expand=True)
         self.text.bind("<<Modified>>", self._on_text_change)
 
-        # Direita: Pré-visualização
-        self._preview_panel = PreviewPanel(
-            self._main,
-            width=420,
-            fg_color=("#E8EEF3", "#1E2C38"),
-            corner_radius=8
-        )
-        self._preview_panel.pack(side="right", fill="both", padx=(10, 0))
+        self._build_drop_support()
 
-        # Motor de pré-visualização
-        self._engine = PreviewEngine(
-            on_update=self._on_preview_ready,
-            debounce_ms=900
-        )
+        ctk.CTkLabel(left, text="Fotos anexadas:").pack(anchor="w", pady=(8, 4))
+        self.fotos_list = ctk.CTkScrollableFrame(left, height=130)
+        self.fotos_list.pack(fill="x")
+        ctk.CTkButton(left, text="Adicionar fotos", command=self._add_fotos).pack(anchor="w", pady=(4, 2))
+
+        ctk.CTkLabel(left, text="Seções extraídas (editáveis):").pack(anchor="w", pady=(8, 4))
+        self.sections_tabs = ttk.Notebook(left)
+        self.sections_tabs.pack(fill="both", expand=True)
+        self.section_widgets = {}
+        nomes = {
+            "descricao": "Escopo",
+            "detalhamento": "Detalhamento",
+            "diagnostico": "Diagnóstico",
+            "acoes": "Ações",
+            "resultado": "Resultado",
+            "estado": "Estado final",
+        }
+        for key in SECOES_EDITAVEIS:
+            frame = ctk.CTkFrame(self.sections_tabs)
+            box = ctk.CTkTextbox(frame, wrap="word", height=90)
+            box.pack(fill="both", expand=True, padx=6, pady=6)
+            box.bind("<<Modified>>", self._on_section_text_edit)
+            self.sections_tabs.add(frame, text=nomes[key])
+            self.section_widgets[key] = box
+
+        right = ctk.CTkFrame(self._main, fg_color="transparent")
+        right.pack(side="right", fill="both", padx=(10, 0))
+
+        self.template_preview = ctk.CTkLabel(right, text="Prévia do template indisponível", width=320)
+        self.template_preview.pack(fill="x", pady=(0, 6))
+
+        self._preview_panel = PreviewPanel(right, width=420, fg_color=("#E8EEF3", "#1E2C38"), corner_radius=8)
+        self._preview_panel.pack(fill="both", expand=True)
+
+        self._engine = PreviewEngine(on_update=self._on_preview_ready, debounce_ms=900)
+        self._preview_panel.set_zoom_factor(self.config_data.get("zoom_factor", 1.0))
+
+        self.status_label = ctk.CTkLabel(self, text="Pronto", anchor="w")
+        self.status_label.pack(fill="x", padx=14, pady=(0, 8))
 
         self.update_label()
+        self._update_template_preview_image()
+        if not self._preview_visible:
+            self._toggle_preview(initial=True)
+
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.bind("<Configure>", self._on_resize)
 
+        self.bind("<Control-g>", lambda e: self.generate())
+        self.bind("<Control-G>", lambda e: self.generate())
+        self.bind("<Control-l>", lambda e: self._limpar())
+        self.bind("<Control-L>", lambda e: self._limpar())
+        self.bind("<Control-t>", lambda e: self.select_template())
+        self.bind("<Control-T>", lambda e: self.select_template())
+        self.bind("<Control-s>", lambda e: self._save_text_to_file())
+        self.bind("<Control-S>", lambda e: self._save_text_to_file())
+
+    def _set_status(self, msg):
+        self.status_label.configure(text=msg)
+
+    def _build_drop_support(self):
+        if not (TkinterDnD and DND_FILES):
+            self._set_status("Arrastar e soltar desativado (tkinterdnd2 não instalado).")
+            return
+        try:
+            self.text.drop_target_register(DND_FILES)
+            self.text.dnd_bind("<<Drop>>", self._on_drop_text_file)
+        except Exception:
+            self._set_status("Não foi possível ativar arrastar e soltar.")
+
+    def _on_drop_text_file(self, event):
+        raw = event.data.strip()
+        paths = self.tk.splitlist(raw)
+        if not paths:
+            return
+        path = paths[0].strip("{}")
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in {".txt", ".md"}:
+            self._set_status("Apenas arquivos .txt e .md são suportados no arrastar/soltar.")
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = f.read()
+            self.text.delete("1.0", "end")
+            self.text.insert("1.0", data)
+            self._set_status(f"Arquivo carregado via arrastar/soltar: {os.path.basename(path)}")
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao carregar arquivo: {e}")
+
+    def _on_section_text_edit(self, event):
+        event.widget.edit_modified(False)
+        if self._suspend_section_events:
+            return
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
+    def _get_sections_from_ui(self):
+        texto = limpar_texto(self.text.get("1.0", "end").strip())
+        sections = parse_text(texto)
+        for key, box in self.section_widgets.items():
+            val = box.get("1.0", "end").strip()
+            if val:
+                sections[key] = val
+            elif key in sections:
+                sections.pop(key)
+        return sections
+
+    def _refresh_sections_panel(self):
+        texto = self.text.get("1.0", "end").strip()
+        sections = parse_text(limpar_texto(texto)) if texto else {}
+        self._suspend_section_events = True
+        try:
+            for key, box in self.section_widgets.items():
+                box.delete("1.0", "end")
+                box.insert("1.0", sections.get(key, ""))
+                box.edit_modified(False)
+        finally:
+            self._suspend_section_events = False
+
     def _limpar(self):
         self.text.delete("1.0", "end")
+        self._refresh_sections_panel()
+        self.fotos = []
+        self._render_fotos_list()
         self._preview_panel.show_status("A pré-visualização aparecerá aqui...")
+        self._set_status("Campos limpos.")
 
     def _on_text_change(self, event=None):
         self.text.edit_modified(False)
+        self._refresh_sections_panel()
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
+    def _on_auto_preview_toggle(self):
+        self.config_data["preview_auto"] = bool(self.chk_auto_var.get())
+        estado = "ativada" if self.chk_auto_var.get() else "desativada"
+        self._set_status(f"Prévia automática {estado}.")
+
+    def force_preview_update(self):
         texto = self.text.get("1.0", "end").strip()
         if not texto:
             self._preview_panel.show_status("A pré-visualização aparecerá aqui...")
             return
         self._preview_panel.show_generating()
-        self._engine.schedule_update(texto)
+        self._set_status("Gerando pré-visualização...")
+        joined = []
+        for key in SECOES_EDITAVEIS:
+            val = self.section_widgets[key].get("1.0", "end").strip()
+            if val:
+                joined.append(f"{key}:\n{val}")
+        preview_text = limpar_texto(texto + "\n\n" + "\n\n".join(joined))
+        self._engine.schedule_update(preview_text)
 
     def _on_preview_ready(self, images, error):
         def _update():
             if error:
+                self._set_status("Falha ao gerar prévia.")
                 self._preview_panel.show_status(f"⚠ {error[:80]}")
             elif images:
+                self._set_status("Prévia atualizada.")
                 self._preview_panel.update_pages(images)
-
         self.after(0, _update)
 
-    def _toggle_preview(self):
+    def _toggle_preview(self, initial=False):
         if self._preview_visible:
             self._preview_panel.pack_forget()
             self._toggle_btn.configure(text="▶ Mostrar prévia")
             self._preview_visible = False
         else:
-            self._preview_panel.pack(side="right", fill="both", padx=(10, 0))
+            self._preview_panel.pack(fill="both", expand=True)
             self._toggle_btn.configure(text="◀ Ocultar prévia")
             self._preview_visible = True
+
+        if not initial:
+            self.config_data["preview_visible"] = self._preview_visible
 
     def _on_resize(self, event=None):
         w = self._preview_panel.winfo_width()
@@ -691,6 +817,11 @@ class App(ctk.CTk):
             self._preview_panel.set_width(w)
 
     def _on_close(self):
+        self.config_data["window_geometry"] = self.geometry()
+        self.config_data["preview_visible"] = self._preview_visible
+        self.config_data["zoom_factor"] = self._preview_panel.get_zoom_factor()
+        self.config_data["preview_auto"] = bool(self.chk_auto_var.get())
+        save_config(self.config_data)
         self._engine.stop()
         self.destroy()
 
@@ -698,12 +829,117 @@ class App(ctk.CTk):
         path = self.config_data.get("template_path", "")
         self.label.configure(text=f"Template: {path}" if path else "Template: não selecionado")
 
+    def _pick_initial_dir(self):
+        return self.config_data.get("last_dir") or os.path.expanduser("~")
+
+    def _remember_dir(self, filepath):
+        if filepath:
+            self.config_data["last_dir"] = os.path.dirname(filepath)
+
+    def _update_template_preview_image(self):
+        tpl = self.config_data.get("template_path", "")
+        if not tpl or not os.path.exists(tpl):
+            self.template_preview.configure(text="Prévia do template indisponível", image=None)
+            return
+        try:
+            doc = fitz.open(tpl)
+            page = doc[0]
+            pix = page.get_pixmap(matrix=fitz.Matrix(0.25, 0.25), alpha=False)
+            doc.close()
+            img = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            img = img.resize((220, int(220 * img.height / img.width)), PILImage.LANCZOS)
+            tk_img = ImageTk.PhotoImage(img)
+            self._template_tk_img = tk_img
+            self.template_preview.configure(text="", image=tk_img)
+        except Exception:
+            self.template_preview.configure(text="Falha ao gerar prévia do template", image=None)
+
     def select_template(self):
-        file = filedialog.askopenfilename(filetypes=[("PDF", "*.pdf")])
+        file = filedialog.askopenfilename(initialdir=self._pick_initial_dir(), filetypes=[("PDF", "*.pdf")])
         if file:
             self.config_data["template_path"] = file
+            self._remember_dir(file)
             save_config(self.config_data)
             self.update_label()
+            self._update_template_preview_image()
+            self._set_status("Template atualizado.")
+
+    def _save_text_to_file(self):
+        content = self.text.get("1.0", "end").strip()
+        if not content:
+            messagebox.showwarning("Salvar", "Não há texto para salvar.")
+            return
+        path = filedialog.asksaveasfilename(
+            initialdir=self._pick_initial_dir(),
+            defaultextension=".txt",
+            filetypes=[("Texto", "*.txt"), ("Markdown", "*.md")],
+        )
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        self._remember_dir(path)
+        self._set_status(f"Texto salvo em {os.path.basename(path)}.")
+
+    def _add_fotos(self):
+        arquivos = filedialog.askopenfilenames(
+            initialdir=self._pick_initial_dir(),
+            title="Selecione as fotos",
+            filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp")],
+        )
+        if not arquivos:
+            return
+        self._remember_dir(arquivos[0])
+        for arquivo in arquivos:
+            self.fotos.append({"path": arquivo, "title": os.path.basename(arquivo)})
+        self._render_fotos_list()
+        self._set_status(f"{len(arquivos)} foto(s) adicionada(s).")
+
+    def _move_foto(self, idx, delta):
+        novo = idx + delta
+        if novo < 0 or novo >= len(self.fotos):
+            return
+        self.fotos[idx], self.fotos[novo] = self.fotos[novo], self.fotos[idx]
+        self._render_fotos_list()
+
+    def _remove_foto(self, idx):
+        self.fotos.pop(idx)
+        self._render_fotos_list()
+
+    def _render_fotos_list(self):
+        for w in self.fotos_list.winfo_children():
+            w.destroy()
+        self._thumb_cache = []
+        if not self.fotos:
+            ctk.CTkLabel(self.fotos_list, text="Nenhuma foto anexada.", text_color="#7E8D9A").pack(anchor="w", padx=4, pady=4)
+            return
+
+        for idx, foto in enumerate(self.fotos):
+            row = ctk.CTkFrame(self.fotos_list)
+            row.pack(fill="x", padx=2, pady=2)
+            thumb_lbl = ctk.CTkLabel(row, text="", width=48)
+            thumb_lbl.pack(side="left", padx=4)
+            try:
+                img = PILImage.open(foto["path"])
+                img.thumbnail((48, 48))
+                tk_img = ImageTk.PhotoImage(img)
+                self._thumb_cache.append(tk_img)
+                thumb_lbl.configure(image=tk_img)
+            except Exception:
+                thumb_lbl.configure(text="N/A")
+
+            entry = ctk.CTkEntry(row)
+            entry.insert(0, foto.get("title", ""))
+            entry.pack(side="left", fill="x", expand=True, padx=4)
+            entry.bind("<KeyRelease>", lambda e, i=idx, ent=entry: self._set_foto_title(i, ent.get()))
+
+            ctk.CTkButton(row, text="↑", width=28, command=lambda i=idx: self._move_foto(i, -1)).pack(side="left", padx=1)
+            ctk.CTkButton(row, text="↓", width=28, command=lambda i=idx: self._move_foto(i, 1)).pack(side="left", padx=1)
+            ctk.CTkButton(row, text="✕", width=28, command=lambda i=idx: self._remove_foto(i)).pack(side="left", padx=1)
+
+    def _set_foto_title(self, idx, title):
+        if 0 <= idx < len(self.fotos):
+            self.fotos[idx]["title"] = title.strip()
 
     def generate(self):
         texto = self.text.get("1.0", "end").strip()
@@ -711,31 +947,32 @@ class App(ctk.CTk):
             messagebox.showerror("Erro", "Cole o texto primeiro")
             return
 
-        texto = limpar_texto(texto)
-        sections = parse_text(texto)
-
-        save = filedialog.asksaveasfilename(defaultextension=".pdf")
+        save = filedialog.asksaveasfilename(
+            initialdir=self._pick_initial_dir(),
+            defaultextension=".pdf",
+            filetypes=[("PDF", "*.pdf")],
+        )
         if not save:
             return
+        self._remember_dir(save)
 
-        fotos = []
-        if messagebox.askyesno("Anexar fotos", "Deseja anexar fotos no PDF?"):
-            arquivos = filedialog.askopenfilenames(
-                title="Selecione as fotos",
-                filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp")],
-            )
-            if arquivos:
-                usar_titulos = messagebox.askyesno("Títulos", "Definir título para cada foto?")
-                for idx, arquivo in enumerate(arquivos, start=1):
-                    titulo = ""
-                    if usar_titulos:
-                        titulo = simpledialog.askstring("Título", f"Foto {idx} ({os.path.basename(arquivo)}):") or ""
-                    fotos.append({"path": arquivo, "title": titulo.strip()})
-
+        sections = self._get_sections_from_ui()
+        self._set_status("Gerando PDF...")
+        self.update_idletasks()
         try:
-            gerar_pdf(sections, self.config_data.get("template_path", ""), save, fotos=fotos)
+            self._set_status("Processando imagens...")
+            gerar_pdf(
+                sections,
+                self.config_data.get("template_path", ""),
+                save,
+                fotos=self.fotos,
+                foto_cols=int(self.foto_cols_var.get()),
+                foto_max_height_cm=float(self.foto_h_var.get()),
+            )
+            self._set_status("PDF gerado com sucesso.")
             messagebox.showinfo("Sucesso", "PDF gerado!")
         except Exception as e:
+            self._set_status("Erro ao gerar PDF.")
             messagebox.showerror("Erro", str(e))
 
 
