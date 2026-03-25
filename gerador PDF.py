@@ -84,16 +84,6 @@ INFO_FIELDS = [
 
 MANDATORY_INFO_FIELDS = ("tecnico", "cliente")
 
-# Cores corporativas centralizadas
-COR_PRIMARIA    = colors.HexColor("#0E2A44")
-COR_SECUNDARIA  = colors.HexColor("#123A5A")
-COR_ACENTO      = colors.HexColor("#1E6FA8")
-COR_FUNDO_LEVE  = colors.HexColor("#F5F8FB")
-COR_BORDA       = colors.HexColor("#C7D4DF")
-COR_BORDA_INNER = colors.HexColor("#DCE5EC")
-COR_TEXTO_CORPO = colors.HexColor("#1F2B37")
-COR_RODAPE_TXT  = colors.HexColor("#5B6E7D")
-
 
 # =========================
 # CONFIG
@@ -106,10 +96,6 @@ def load_config():
         "preview_auto": True,
         "zoom_factor": 1.0,
         "window_geometry": "1280x750",
-        "watermark_enabled": False,
-        "watermark_path": "",
-        "watermark_opacity": 0.08,
-        "signature_enabled": True,
     }
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -260,7 +246,7 @@ def processar_lista(texto, styles):
 
 
 # =========================
-# PDF — UTILITÁRIOS
+# PDF
 # =========================
 def _coerce_offset_cm(value):
     try:
@@ -397,231 +383,6 @@ def _compose_horarios_table_text(rows=None):
     return "\n".join(lines)
 
 
-# =========================
-# MARCA D'ÁGUA
-# =========================
-def _apply_watermark_logo(canvas_obj, watermark_path, opacity=0.08):
-    """Desenha logo centralizado e semitransparente como marca d'água."""
-    if not watermark_path or not os.path.exists(watermark_path):
-        return
-    try:
-        page_w, page_h = A4
-        max_w = page_w * 0.55
-        max_h = page_h * 0.55
-
-        img_reader = ImageReader(watermark_path)
-        img_w, img_h = img_reader.getSize()
-        scale = min(max_w / img_w, max_h / img_h)
-        draw_w = img_w * scale
-        draw_h = img_h * scale
-        x = (page_w - draw_w) / 2
-        y = (page_h - draw_h) / 2
-
-        canvas_obj.saveState()
-        canvas_obj.setFillAlpha(opacity)
-        canvas_obj.drawImage(
-            watermark_path, x, y, width=draw_w, height=draw_h,
-            preserveAspectRatio=True, mask="auto"
-        )
-        canvas_obj.restoreState()
-    except Exception:
-        pass
-
-
-# =========================
-# CAPA  (usa template como base, igual às demais páginas)
-# =========================
-def _build_cover_content(canvas_obj, info, watermark_path="", watermark_opacity=0.08, watermark_enabled=False):
-    """
-    Desenha o CONTEÚDO da capa sobre o canvas — o template PDF já foi
-    aplicado como fundo via pypdf antes de chamar esta função, então aqui
-    só desenhamos os dados do relatório, sem recriar o visual do template.
-    """
-    page_w, page_h = A4
-
-    # Marca d'água (por cima do template, abaixo do conteúdo)
-    if watermark_enabled:
-        _apply_watermark_logo(canvas_obj, watermark_path, watermark_opacity)
-
-    # Título centralizado — área superior da área de conteúdo
-    canvas_obj.setFont("Helvetica-Bold", 18)
-    canvas_obj.setFillColor(COR_PRIMARIA)
-    canvas_obj.drawCentredString(page_w / 2, page_h - 5.5 * cm, "Relatório de Atendimento Técnico")
-
-    # Separador
-    canvas_obj.setStrokeColor(COR_ACENTO)
-    canvas_obj.setLineWidth(1.5)
-    canvas_obj.line(2.5 * cm, page_h - 6.0 * cm, page_w - 2.5 * cm, page_h - 6.0 * cm)
-
-    # Todos os dados de cabeçalho devem aparecer na capa
-    cover_labels = {
-        "equipamento": "Equipamento",
-        "fonte": "Modelo da Fonte",
-        "cliente": "Nome do Cliente",
-        "cnc": "Marca do CNC",
-        "thc": "Controle de Altura",
-        "fabricante": "Fabricante",
-        "contato_cliente": "Contato no Cliente",
-        "data": "Data",
-        "tecnico": "Técnico Responsável",
-        "acompanhamento": "Acompanhamento",
-        "inicio": "Data início",
-        "fim": "Data final",
-        "tempo_atendimento": "Tempo Atendimento",
-        "tempo_espera": "Tempo Espera",
-    }
-    all_cover_fields = [(cover_labels[k], info.get(k, "")) for _, k in INFO_FIELDS]
-    visible_fields = [(l, v) for l, v in all_cover_fields if _valor_info_preenchido(v)]
-    if not visible_fields:
-        visible_fields = all_cover_fields
-
-    col_label = 4.5 * cm
-    col_value = page_w - 2.5 * cm - 2.5 * cm - col_label
-    row_h = 0.72 * cm
-    tbl_x = 2.5 * cm
-    tbl_w = page_w - 5 * cm
-
-    def _draw_info_table(canvas_obj, rows, start_y):
-        tbl_h = row_h * len(rows)
-        # Borda externa
-        canvas_obj.setStrokeColor(COR_BORDA)
-        canvas_obj.setLineWidth(0.7)
-        canvas_obj.rect(tbl_x, start_y - tbl_h, tbl_w, tbl_h, stroke=1, fill=0)
-        for i, (label, valor) in enumerate(rows):
-            row_y = start_y - (i + 1) * row_h
-            # Fundo alternado para linhas pares
-            if i % 2 == 0:
-                canvas_obj.setFillColor(colors.HexColor("#F5F8FB"))
-                canvas_obj.rect(tbl_x, row_y, tbl_w, row_h, stroke=0, fill=1)
-            # Fundo da coluna de rótulo
-            canvas_obj.setFillColor(colors.HexColor("#EAF0F6"))
-            canvas_obj.rect(tbl_x, row_y, col_label, row_h, stroke=0, fill=1)
-            # Linha separadora horizontal
-            canvas_obj.setStrokeColor(COR_BORDA_INNER)
-            canvas_obj.setLineWidth(0.4)
-            canvas_obj.line(tbl_x, row_y, tbl_x + tbl_w, row_y)
-            # Linha separadora coluna
-            canvas_obj.line(tbl_x + col_label, row_y, tbl_x + col_label, row_y + row_h)
-            # Textos
-            text_y = row_y + row_h * 0.28
-            canvas_obj.setFont("Helvetica-Bold", 9)
-            canvas_obj.setFillColor(COR_PRIMARIA)
-            canvas_obj.drawString(tbl_x + 0.25 * cm, text_y, label)
-            canvas_obj.setFont("Helvetica", 9.5)
-            canvas_obj.setFillColor(COR_TEXTO_CORPO)
-            canvas_obj.drawString(tbl_x + col_label + 0.25 * cm, text_y, str(valor))
-        return start_y - tbl_h
-
-    y_cursor = page_h - 7.2 * cm
-
-    # Divide em duas tabelas para ocupar melhor a capa
-    split_idx = max(1, (len(visible_fields) + 1) // 2)
-    campos_topo = visible_fields[:split_idx]
-    campos_base = visible_fields[split_idx:]
-
-    if campos_topo:
-        y_cursor = _draw_info_table(canvas_obj, campos_topo, y_cursor)
-        y_cursor -= 0.9 * cm
-    if campos_base:
-        _draw_info_table(canvas_obj, campos_base, y_cursor)
-
-    canvas_obj.showPage()
-
-
-# =========================
-# PÁGINA DE ASSINATURA  (usa template como base)
-# =========================
-def _build_signature_content(canvas_obj, info):
-    """
-    Desenha o conteúdo da página de assinatura sobre o canvas.
-    O template PDF já foi aplicado como fundo via pypdf.
-    """
-    page_w, page_h = A4
-
-    tecnico_val = info.get("tecnico", "")
-    cliente_val = info.get("cliente", "")
-    data_val    = info.get("data", "___/___/______")
-
-    # Título da seção
-    canvas_obj.setFont("Helvetica-Bold", 14)
-    canvas_obj.setFillColor(COR_PRIMARIA)
-    canvas_obj.drawCentredString(page_w / 2, page_h - 5.0 * cm, "CONFIRMAÇÃO E ASSINATURA")
-
-    canvas_obj.setStrokeColor(COR_ACENTO)
-    canvas_obj.setLineWidth(1.5)
-    canvas_obj.line(page_w / 2 - 4.5 * cm, page_h - 5.5 * cm,
-                    page_w / 2 + 4.5 * cm, page_h - 5.5 * cm)
-
-    # Texto declaratório
-    canvas_obj.setFont("Helvetica", 9)
-    canvas_obj.setFillColor(COR_RODAPE_TXT)
-    canvas_obj.drawCentredString(
-        page_w / 2, page_h - 6.4 * cm,
-        "Declaro que os serviços descritos neste relatório foram realizados"
-        " e estão em conformidade com o solicitado."
-    )
-
-    # Dados resumidos
-    canvas_obj.setFont("Helvetica", 8.5)
-    canvas_obj.setFillColor(COR_TEXTO_CORPO)
-    canvas_obj.drawString(2.5 * cm, page_h - 7.5 * cm, f"Data do atendimento: {data_val}")
-    if tecnico_val:
-        canvas_obj.drawString(2.5 * cm, page_h - 8.1 * cm, f"Técnico responsável: {tecnico_val}")
-    if cliente_val:
-        canvas_obj.drawString(2.5 * cm, page_h - 8.7 * cm, f"Empresa / Cliente: {cliente_val}")
-
-    # Caixas de assinatura
-    def _draw_signature_box(x, y, width, label, name_hint=""):
-        height = 4.0 * cm
-        canvas_obj.setFillColor(colors.white)
-        canvas_obj.setStrokeColor(COR_BORDA)
-        canvas_obj.setLineWidth(0.8)
-        canvas_obj.roundRect(x, y, width, height, 4, stroke=1, fill=1)
-
-        canvas_obj.setFillColor(COR_PRIMARIA)
-        canvas_obj.roundRect(x, y + height - 0.85 * cm, width, 0.85 * cm, 4, stroke=0, fill=1)
-        canvas_obj.setFont("Helvetica-Bold", 8.5)
-        canvas_obj.setFillColor(colors.white)
-        canvas_obj.drawCentredString(x + width / 2, y + height - 0.58 * cm, label)
-
-        canvas_obj.setStrokeColor(COR_BORDA_INNER)
-        canvas_obj.setLineWidth(0.7)
-        canvas_obj.line(x + 0.5 * cm, y + 1.6 * cm, x + width - 0.5 * cm, y + 1.6 * cm)
-        canvas_obj.setFont("Helvetica", 7.5)
-        canvas_obj.setFillColor(COR_RODAPE_TXT)
-        canvas_obj.drawCentredString(x + width / 2, y + 1.3 * cm, "Assinatura")
-
-        canvas_obj.line(x + 0.5 * cm, y + 0.65 * cm, x + width - 0.5 * cm, y + 0.65 * cm)
-        canvas_obj.drawCentredString(
-            x + width / 2, y + 0.35 * cm,
-            f"Nome: {name_hint}" if name_hint else "Nome:"
-        )
-
-    box_w = (page_w - 6.5 * cm) / 2
-    box_y = page_h - 15.5 * cm
-
-    _draw_signature_box(2.5 * cm, box_y, box_w, "TÉCNICO RESPONSÁVEL", tecnico_val)
-    _draw_signature_box(page_w - 2.5 * cm - box_w, box_y, box_w, "CLIENTE / RESPONSÁVEL", cliente_val)
-
-    # Caixa de observações
-    obs_y = box_y - 5.0 * cm
-    obs_h = 4.0 * cm
-    canvas_obj.setFillColor(COR_FUNDO_LEVE)
-    canvas_obj.setStrokeColor(COR_BORDA)
-    canvas_obj.setLineWidth(0.8)
-    canvas_obj.roundRect(2.5 * cm, obs_y, page_w - 5 * cm, obs_h, 4, stroke=1, fill=1)
-    canvas_obj.setFillColor(COR_PRIMARIA)
-    canvas_obj.roundRect(2.5 * cm, obs_y + obs_h - 0.75 * cm, page_w - 5 * cm, 0.75 * cm, 4, stroke=0, fill=1)
-    canvas_obj.setFont("Helvetica-Bold", 8)
-    canvas_obj.setFillColor(colors.white)
-    canvas_obj.drawString(3.0 * cm, obs_y + obs_h - 0.50 * cm, "OBSERVAÇÕES FINAIS")
-
-    canvas_obj.showPage()
-
-
-# =========================
-# PDF PRINCIPAL
-# =========================
 def gerar_pdf(
     sections,
     template_path,
@@ -631,10 +392,6 @@ def gerar_pdf(
     foto_max_height_cm=8.1,
     section_offsets_cm=None,
     horarios=None,
-    watermark_enabled=False,
-    watermark_path="",
-    watermark_opacity=0.08,
-    signature_enabled=True,
 ):
     import uuid
     temp_pdf = output_path + f".tmp_{uuid.uuid4().hex[:8]}.pdf"
@@ -645,52 +402,41 @@ def gerar_pdf(
 
     styles.add(ParagraphStyle(name="Titulo",
                               fontSize=18, alignment=1, spaceAfter=6,
-                              textColor=COR_PRIMARIA, leading=22))
+                              textColor=colors.HexColor("#0E2A44"), leading=22))
 
-    # Título de seção com faixa colorida de fundo
-    styles.add(ParagraphStyle(
-        name="Secao",
-        fontSize=11,
-        spaceBefore=16,
-        spaceAfter=6,
-        textColor=colors.white,
-        leading=14,
-        keepWithNext=True,
-        backColor=COR_PRIMARIA,
-        borderPad=(5, 8, 5, 8),
-        leftIndent=0,
-        rightIndent=0,
-    ))
+    styles.add(ParagraphStyle(name="Secao",
+                              fontSize=12.5, spaceBefore=14, spaceAfter=7,
+                              textColor=colors.HexColor("#123A5A"), leading=15, keepWithNext=True))
 
     styles.add(ParagraphStyle(name="Body",
-                              fontSize=10.5, leading=15, textColor=COR_TEXTO_CORPO))
-
-    # Legenda de foto
-    styles.add(ParagraphStyle(
-        name="FotoLegenda",
-        fontSize=9,
-        leading=13,
-        textColor=COR_RODAPE_TXT,
-        fontName="Helvetica-Oblique",
-        leftIndent=4,
-        spaceBefore=4,
-        spaceAfter=6,
-        borderPad=(4, 6, 4, 6),
-        backColor=colors.HexColor("#EDF2F7"),
-    ))
-
-    styles.add(ParagraphStyle(
-        name="FotoTitulo",
-        fontSize=10,
-        leading=13,
-        textColor=COR_PRIMARIA,
-        fontName="Helvetica-Bold",
-        spaceAfter=4,
-    ))
+                              fontSize=10.5, leading=15, textColor=colors.HexColor("#1F2B37")))
 
     story = []
 
     info = sections.get("info", {})
+    dados = []
+
+    for label, key in INFO_FIELDS:
+        valor = info.get(key)
+        if _valor_info_preenchido(valor):
+            dados.append([label, str(valor).strip()])
+
+    if dados:
+        tabela = Table(dados, colWidths=[5 * cm, 10 * cm])
+        tabela.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FCFDFE")),
+            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#C7D4DF")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DCE5EC")),
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E9F0F6")),
+            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        story.append(tabela)
+        story.append(Spacer(1, 15))
 
     section_offsets_cm = section_offsets_cm or {}
 
@@ -698,18 +444,7 @@ def gerar_pdf(
         offset_cm = _coerce_offset_cm(section_offsets_cm.get(section_key, 0))
         if offset_cm > 0:
             story.append(Spacer(1, offset_cm * cm))
-
-        # Separador visual antes do título
-        story.append(HRFlowable(
-            width="100%",
-            thickness=0.5,
-            color=COR_ACENTO,
-            spaceBefore=4,
-            spaceAfter=0,
-        ))
-
-        # Título com fundo escuro
-        story.append(Paragraph(f"  {titulo}", styles["Secao"]))
+        story.append(Paragraph(f"<b>{titulo}</b>", styles["Secao"]))
         story.extend(processar_lista(conteudo, styles))
 
     if sections.get("descricao"):
@@ -727,16 +462,15 @@ def gerar_pdf(
 
     horarios = horarios or []
     if horarios:
-        story.append(HRFlowable(width="100%", thickness=0.5, color=COR_ACENTO, spaceBefore=4, spaceAfter=0))
-        story.append(Paragraph("  TABELA DE HORÁRIOS DO ATENDIMENTO", styles["Secao"]))
+        story.append(Paragraph("<b>TABELA DE HORÁRIOS DO ATENDIMENTO</b>", styles["Secao"]))
         story.append(Spacer(1, 8))
         dados_horarios = [["Data", "Início", "Fim", "Intervalos"], *horarios]
         tabela_horarios = Table(dados_horarios, colWidths=[4 * cm, 3.2 * cm, 3.2 * cm, 5.6 * cm])
         tabela_horarios.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DCE8F2")),
             ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F8FBFD")),
-            ("BOX", (0, 0), (-1, -1), 1, COR_BORDA),
-            ("INNERGRID", (0, 0), (-1, -1), 0.5, COR_BORDA_INNER),
+            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#C7D4DF")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DCE5EC")),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("ALIGN", (1, 1), (2, -1), "CENTER"),
             ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -747,8 +481,7 @@ def gerar_pdf(
         story.append(tabela_horarios)
 
     if fotos:
-        story.append(HRFlowable(width="100%", thickness=0.5, color=COR_ACENTO, spaceBefore=4, spaceAfter=0))
-        story.append(Paragraph("  ANEXOS FOTOGRÁFICOS", styles["Secao"]))
+        story.append(Paragraph("<b>ANEXOS FOTOGRÁFICOS</b>", styles["Secao"]))
         story.append(Spacer(1, 6))
 
         largura_util = A4[0] - (5 * cm)
@@ -765,7 +498,7 @@ def gerar_pdf(
             ajuste_largura_pct = max(30.0, min(130.0, float(foto_item.get("width_percent", 100.0)))) / 100.0
             largura_limite = largura_max * ajuste_largura_pct
 
-            bloco = [Paragraph(f"{foto_idx}. {titulo}", styles["FotoTitulo"]), Spacer(1, 4)]
+            bloco = [Paragraph(f"<b>{foto_idx}. {titulo}</b>", styles["Body"]), Spacer(1, 4)]
             try:
                 img_reader = ImageReader(caminho)
                 largura_original, altura_original = img_reader.getSize()
@@ -779,9 +512,8 @@ def gerar_pdf(
                 bloco.append(Paragraph("Não foi possível carregar esta imagem.", styles["Body"]))
 
             if comentario:
-                bloco.append(Paragraph(f"Comentário: {comentario}", styles["FotoLegenda"]))
-            else:
                 bloco.append(Spacer(1, 4))
+                bloco.append(Paragraph(f"<i>Comentário:</i> {comentario}", styles["Body"]))
             return bloco
 
         def _flush_half_blocks():
@@ -816,28 +548,20 @@ def gerar_pdf(
                     _flush_half_blocks()
         _flush_half_blocks()
 
-    # ---- Canvas personalizado ----
-    _wm_enabled = watermark_enabled
-    _wm_path = watermark_path
-    _wm_opacity = watermark_opacity
-    _info_ref = dict(info)
-
     def _draw_page_chrome(canvas_obj, page_number):
-        if _wm_enabled:
-            _apply_watermark_logo(canvas_obj, _wm_path, _wm_opacity)
-
         canvas_obj.saveState()
-        # Apenas rodapé nas páginas internas (cabeçalho fica apenas na capa)
-        cliente = _info_ref.get("cliente", "")
-        canvas_obj.setFont("Helvetica", 8.5)
-        canvas_obj.setFillColor(COR_RODAPE_TXT)
-        canvas_obj.drawString(2.5 * cm, 1.4 * cm, f"Assistência Técnica Grupo BAW{' | ' + cliente if cliente else ''}")
-        canvas_obj.drawRightString(18.5 * cm, 1.4 * cm, f"Página {page_number}")
+        canvas_obj.setFillColor(colors.HexColor("#F5F8FB"))
+        canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=0, fill=1)
+        canvas_obj.setStrokeColor(colors.HexColor("#D1DCE6"))
+        canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=1, fill=0)
+        canvas_obj.setFont("Helvetica-Bold", 12)
+        canvas_obj.setFillColor(colors.HexColor("#0E2A44"))
+        canvas_obj.drawCentredString(A4[0] / 2, A4[1] - 1.95 * cm, "RELATÓRIO TÉCNICO DE ATENDIMENTO")
 
-        # Linha fina no rodapé
-        canvas_obj.setStrokeColor(COR_BORDA)
-        canvas_obj.setLineWidth(0.5)
-        canvas_obj.line(2.3 * cm, 1.85 * cm, A4[0] - 2.3 * cm, 1.85 * cm)
+        canvas_obj.setFont("Helvetica", 8.8)
+        canvas_obj.setFillColor(colors.HexColor("#5B6E7D"))
+        canvas_obj.drawString(2.5 * cm, 1.4 * cm, "Relatório técnico")
+        canvas_obj.drawRightString(18.5 * cm, 1.4 * cm, f"Página {page_number}")
         canvas_obj.restoreState()
 
     class FinalPageCanvas(pdf_canvas.Canvas):
@@ -856,7 +580,7 @@ def gerar_pdf(
                 _draw_page_chrome(self, idx)
                 if idx == total:
                     self.setFont("Helvetica-Bold", 11)
-                    self.setFillColor(COR_PRIMARIA)
+                    self.setFillColor(colors.HexColor("#0E2A44"))
                     self.drawCentredString(A4[0] / 2, 2.05 * cm, "Assistência Técnica Grupo BAW")
                 super().showPage()
             super().save()
@@ -867,75 +591,33 @@ def gerar_pdf(
 
     doc.build(story, canvasmaker=FinalPageCanvas)
 
-    # --- Montar PDF final: capa + conteúdo + assinatura ---
-    import io
-
     template_path_real = template_path if template_path else ""
-    has_template = bool(template_path_real and os.path.exists(template_path_real))
-
-    def _make_overlay_page(draw_fn, *args, **kwargs):
-        """Gera uma página de conteúdo num buffer temporário."""
-        buf = io.BytesIO()
-        c = pdf_canvas.Canvas(buf, pagesize=A4)
-        draw_fn(c, *args, **kwargs)
-        c.save()
-        buf.seek(0)
-        return PdfReader(buf).pages[0]
-
-    def _merge_template_with_content(template_page, content_page):
-        """Retorna a template_page com o content_page mesclado por cima."""
-        from copy import deepcopy
-        base = deepcopy(template_page)
-        base.merge_page(content_page)
-        return base
-
-    writer = PdfWriter()
-
-    # ---- CAPA ----
-    cover_content_page = _make_overlay_page(
-        _build_cover_content,
-        _info_ref,
-        watermark_path=_wm_path,
-        watermark_opacity=_wm_opacity,
-        watermark_enabled=_wm_enabled,
-    )
-    if has_template:
+    if template_path_real and os.path.exists(template_path_real):
         template_reader = PdfReader(template_path_real)
-        template_base = template_reader.pages[0]
-        cover_final = _merge_template_with_content(template_base, cover_content_page)
-    else:
-        cover_final = cover_content_page
-    writer.add_page(cover_final)
+        content_reader = PdfReader(temp_pdf)
+        writer = PdfWriter()
 
-    # ---- PÁGINAS DE CONTEÚDO ----
-    content_reader = PdfReader(temp_pdf)
-    if has_template:
+        template_base = template_reader.pages[0]
         for page in content_reader.pages:
             writer.add_page(template_base)
             out_page = writer.pages[-1]
             out_page.merge_page(page)
+
+        with open(output_path, "wb") as f:
+            writer.write(f)
+        os.remove(temp_pdf)
     else:
-        for page in content_reader.pages:
-            writer.add_page(page)
-
-    # ---- PÁGINA DE ASSINATURA ----
-    if signature_enabled:
-        sig_content_page = _make_overlay_page(_build_signature_content, _info_ref)
-        if has_template:
-            sig_final = _merge_template_with_content(template_base, sig_content_page)
-        else:
-            sig_final = sig_content_page
-        writer.add_page(sig_final)
-
-    with open(output_path, "wb") as f:
-        writer.write(f)
-    os.remove(temp_pdf)
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        os.rename(temp_pdf, output_path)
 
 
 # =========================
 # PREVIEW ENGINE
 # =========================
 class PreviewEngine:
+    """Gera imagens de pré-visualização do PDF num thread em segundo plano com debounce."""
+
     def __init__(self, on_update, debounce_ms=1000):
         self.on_update = on_update
         self.debounce_ms = debounce_ms
@@ -949,10 +631,6 @@ class PreviewEngine:
         self._current_section_offsets_cm = {}
         self._current_template_path = ""
         self._current_horarios = []
-        self._current_wm_enabled = False
-        self._current_wm_path = ""
-        self._current_wm_opacity = 0.08
-        self._current_signature_enabled = True
         self._temp_dir = tempfile.mkdtemp()
         self._running = True
 
@@ -966,10 +644,6 @@ class PreviewEngine:
         section_offsets_cm=None,
         template_path="",
         horarios=None,
-        watermark_enabled=False,
-        watermark_path="",
-        watermark_opacity=0.08,
-        signature_enabled=True,
     ):
         with self._lock:
             self._current_text = text
@@ -980,10 +654,6 @@ class PreviewEngine:
             self._current_section_offsets_cm = section_offsets_cm or {}
             self._current_template_path = template_path or ""
             self._current_horarios = horarios or []
-            self._current_wm_enabled = watermark_enabled
-            self._current_wm_path = watermark_path
-            self._current_wm_opacity = watermark_opacity
-            self._current_signature_enabled = signature_enabled
             if self._timer is not None:
                 self._timer.cancel()
             self._timer = threading.Timer(self.debounce_ms / 1000.0, self._generate)
@@ -1002,10 +672,6 @@ class PreviewEngine:
             section_offsets_cm = self._current_section_offsets_cm
             template_path = self._current_template_path
             horarios = self._current_horarios
-            wm_enabled = self._current_wm_enabled
-            wm_path = self._current_wm_path
-            wm_opacity = self._current_wm_opacity
-            sig_enabled = self._current_signature_enabled
 
         import uuid
         temp_pdf = os.path.join(self._temp_dir, f"preview_{uuid.uuid4().hex[:8]}.pdf")
@@ -1022,10 +688,6 @@ class PreviewEngine:
                 foto_max_height_cm=foto_max_height_cm,
                 section_offsets_cm=section_offsets_cm,
                 horarios=horarios,
-                watermark_enabled=wm_enabled,
-                watermark_path=wm_path,
-                watermark_opacity=wm_opacity,
-                signature_enabled=sig_enabled,
             )
 
             doc = fitz.open(temp_pdf)
@@ -1278,10 +940,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data.setdefault("zoom_factor", 1.0)
         self.config_data.setdefault("last_dir", "")
         self.config_data.setdefault("default_tecnico", "")
-        self.config_data.setdefault("watermark_enabled", False)
-        self.config_data.setdefault("watermark_path", "")
-        self.config_data.setdefault("watermark_opacity", 0.08)
-        self.config_data.setdefault("signature_enabled", True)
 
         self.fotos = []
         self._thumb_cache = []
@@ -1311,9 +969,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self._toggle_btn = ctk.CTkButton(top, text="◀ Ocultar prévia", width=130, command=self._toggle_preview)
         self._toggle_btn.pack(side="right", padx=8)
 
-        # Barra de opções — linha 1: fotos
         options = ctk.CTkFrame(self, fg_color="transparent")
-        options.pack(fill="x", padx=14, pady=(0, 2))
+        options.pack(fill="x", padx=14, pady=(0, 6))
         ctk.CTkLabel(options, text="Layout das fotos:").pack(side="left")
         self.foto_cols_var = tk.StringVar(value="2")
         ctk.CTkOptionMenu(
@@ -1332,44 +989,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             width=90,
             command=lambda _v: self._on_photo_layout_change(),
         ).pack(side="left")
-
-        # Barra de opções — linha 2: marca d'água
-        wm_bar = ctk.CTkFrame(self, fg_color="transparent")
-        wm_bar.pack(fill="x", padx=14, pady=(0, 6))
-
-        self._wm_enabled_var = tk.BooleanVar(value=bool(self.config_data.get("watermark_enabled", False)))
-        ctk.CTkCheckBox(
-            wm_bar,
-            text="Marca d'água (logo)",
-            variable=self._wm_enabled_var,
-            command=self._on_watermark_toggle,
-        ).pack(side="left", padx=(0, 8))
-
-        self._wm_path_label = ctk.CTkLabel(wm_bar, text=self._wm_display_name(), text_color="#7D93A8", width=200, anchor="w")
-        self._wm_path_label.pack(side="left", padx=(0, 6))
-
-        ctk.CTkButton(wm_bar, text="Selecionar logo", width=130, command=self._select_watermark).pack(side="left", padx=(0, 10))
-
-        ctk.CTkLabel(wm_bar, text="Opacidade:").pack(side="left", padx=(0, 4))
-        self._wm_opacity_var = tk.StringVar(value=str(self.config_data.get("watermark_opacity", 0.08)))
-        ctk.CTkOptionMenu(
-            wm_bar,
-            variable=self._wm_opacity_var,
-            values=["0.04", "0.06", "0.08", "0.10", "0.15", "0.20"],
-            width=90,
-            command=lambda _v: self._on_watermark_toggle(),
-        ).pack(side="left")
-
-        # Separador
-        ctk.CTkLabel(wm_bar, text=" | ", text_color="#5A6A7A").pack(side="left", padx=8)
-
-        self._sig_enabled_var = tk.BooleanVar(value=bool(self.config_data.get("signature_enabled", True)))
-        ctk.CTkCheckBox(
-            wm_bar,
-            text="Incluir página de assinaturas",
-            variable=self._sig_enabled_var,
-            command=self._on_signature_toggle,
-        ).pack(side="left", padx=(0, 4))
 
         self._main = ctk.CTkFrame(self, fg_color="transparent")
         self._main.pack(fill="both", expand=True, padx=14, pady=(0, 6))
@@ -1466,42 +1085,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.bind("<Control-T>", lambda e: self.select_template())
         self.bind("<Control-s>", lambda e: self._save_text_to_file())
         self.bind("<Control-S>", lambda e: self._save_text_to_file())
-
-    # ---- Marca d'água helpers ----
-    def _wm_display_name(self):
-        p = str(self.config_data.get("watermark_path", "")).strip()
-        return os.path.basename(p) if p else "nenhum logo selecionado"
-
-    def _select_watermark(self):
-        file = filedialog.askopenfilename(
-            initialdir=self._pick_initial_dir(),
-            title="Selecionar logo para marca d'água",
-            filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp")],
-        )
-        if not file:
-            return
-        self.config_data["watermark_path"] = file
-        self._remember_dir(file)
-        self._wm_path_label.configure(text=os.path.basename(file))
-        save_config(self.config_data)
-        if self.chk_auto_var.get():
-            self.force_preview_update()
-
-    def _on_watermark_toggle(self, *_):
-        self.config_data["watermark_enabled"] = bool(self._wm_enabled_var.get())
-        try:
-            self.config_data["watermark_opacity"] = float(self._wm_opacity_var.get())
-        except Exception:
-            self.config_data["watermark_opacity"] = 0.08
-        save_config(self.config_data)
-        if self.chk_auto_var.get():
-            self.force_preview_update()
-
-    def _on_signature_toggle(self, *_):
-        self.config_data["signature_enabled"] = bool(self._sig_enabled_var.get())
-        save_config(self.config_data)
-        if self.chk_auto_var.get():
-            self.force_preview_update()
 
     def _set_status(self, msg):
         self.status_label.configure(text=msg)
@@ -1672,10 +1255,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             section_offsets_cm=self._get_section_offsets_cm(),
             template_path=self.config_data.get("template_path", ""),
             horarios=self._get_horarios_from_ui(),
-            watermark_enabled=bool(self._wm_enabled_var.get()),
-            watermark_path=str(self.config_data.get("watermark_path", "")),
-            watermark_opacity=float(self._wm_opacity_var.get()),
-            signature_enabled=bool(self._sig_enabled_var.get()),
         )
 
     def _on_preview_ready(self, images, error):
@@ -1711,9 +1290,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data["preview_visible"] = self._preview_visible
         self.config_data["zoom_factor"] = self._preview_panel.get_zoom_factor()
         self.config_data["preview_auto"] = bool(self.chk_auto_var.get())
-        self.config_data["watermark_enabled"] = bool(self._wm_enabled_var.get())
-        self.config_data["watermark_opacity"] = float(self._wm_opacity_var.get())
-        self.config_data["signature_enabled"] = bool(self._sig_enabled_var.get())
         save_config(self.config_data)
         self._engine.stop()
         self.destroy()
@@ -1731,6 +1307,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             save_config(self.config_data)
 
     def _update_template_preview_image(self):
+        # Prévia dedicada do template removida: agora mostramos apenas a pré-visualização final do PDF.
         return
 
     def select_template(self):
@@ -1931,10 +1508,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 foto_max_height_cm=float(self.foto_h_var.get()),
                 section_offsets_cm=self._get_section_offsets_cm(),
                 horarios=self._get_horarios_from_ui(),
-                watermark_enabled=bool(self._wm_enabled_var.get()),
-                watermark_path=str(self.config_data.get("watermark_path", "")),
-                watermark_opacity=float(self._wm_opacity_var.get()),
-                signature_enabled=bool(self._sig_enabled_var.get()),
             )
             self._set_status("PDF gerado com sucesso.")
             messagebox.showinfo("Sucesso", "PDF gerado!")
