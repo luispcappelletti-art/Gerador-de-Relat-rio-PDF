@@ -705,10 +705,8 @@ def gerar_pdf(
         ]
         tabela = Table(dados_tabela, colWidths=[largura_label, largura_valor], repeatRows=0)
         tabela.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FCFDFE")),
             ("BOX", (0, 0), (-1, -1), 1.6, colors.HexColor("#9FB3C7")),
             ("INNERGRID", (0, 0), (-1, -1), 0.9, colors.HexColor("#C2D1DE")),
-            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E9F0F6")),
             ("LEFTPADDING", (0, 0), (-1, -1), cover_padding),
             ("RIGHTPADDING", (0, 0), (-1, -1), cover_padding),
             ("TOPPADDING", (0, 0), (-1, -1), max(4, int(7 * cover_scale))),
@@ -754,8 +752,6 @@ def gerar_pdf(
         dados_horarios = [["Data", "Início", "Fim", "Intervalos", "Descrição"], *horarios]
         tabela_horarios = Table(dados_horarios, colWidths=[3.2 * cm, 2.4 * cm, 2.4 * cm, 4.2 * cm, 3.8 * cm])
         tabela_horarios.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DCE8F2")),
-            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F8FBFD")),
             ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#C7D4DF")),
             ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DCE5EC")),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
@@ -843,8 +839,6 @@ def gerar_pdf(
     def _draw_page_chrome(canvas_obj, page_number):
         canvas_obj.saveState()
         if page_number > 1:
-            canvas_obj.setFillColor(colors.HexColor("#F5F8FB"))
-            canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=0, fill=1)
             canvas_obj.setStrokeColor(colors.HexColor("#D1DCE6"))
             canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=1, fill=0)
             canvas_obj.setFont("Helvetica-Bold", 12)
@@ -1719,12 +1713,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         left.pack(side="left", fill="both", expand=True)
 
         ctk.CTkLabel(left, text="Cole ou digite o texto do relatório:", font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 4))
-        self.text = ctk.CTkTextbox(left, wrap="word", font=ctk.CTkFont(family="Courier New", size=12), height=170)
+        self.text = ctk.CTkTextbox(left, wrap="word", font=ctk.CTkFont(family="Courier New", size=12), height=120)
         self.text.pack(fill="x", expand=False)
         self.text.bind("<<Modified>>", self._on_text_change)
 
         ctk.CTkLabel(left, text="Fotos anexadas:").pack(anchor="w", pady=(8, 4))
-        self.fotos_list = ctk.CTkScrollableFrame(left, height=130)
+        self.fotos_list = ctk.CTkScrollableFrame(left, height=85)
         self.fotos_list.pack(fill="x")
         ctk.CTkButton(left, text="Adicionar fotos", command=self._add_fotos).pack(anchor="w", pady=(4, 2))
 
