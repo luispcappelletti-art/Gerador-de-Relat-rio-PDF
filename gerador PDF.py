@@ -1238,38 +1238,31 @@ class HorariosTableEditor(ctk.CTkFrame):
         self._on_change = on_change
         self._inline_editor = None
 
+        controls = ctk.CTkFrame(self, fg_color="transparent")
+        controls.pack(fill="x", padx=6, pady=(6, 2))
+        ctk.CTkLabel(
+            controls,
+            text="Edite direto na tabela (duplo clique na célula).",
+            text_color="#8a8a8a",
+        ).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(controls, text="Adicionar linha", width=120, command=self._add_empty_row).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(controls, text="Remover", width=90, command=self._remove_selected).pack(side="left")
+
         self.tree = ttk.Treeview(self, columns=self.COLUMNS, show="headings", height=4)
         headings = ("Data", "Início", "Fim", "Intervalos")
         widths = (100, 70, 70, 220)
         for col, heading, width in zip(self.COLUMNS, headings, widths):
             self.tree.heading(col, text=heading)
             self.tree.column(col, width=width, anchor="center" if col != "intervalos" else "w", stretch=True)
-        controls = ctk.CTkFrame(self, fg_color="transparent")
-        controls.pack(fill="x", padx=6, pady=(6, 2))
-
-        self.inputs = {}
-        for label, key, width in (("Data", "data", 90), ("Início", "inicio", 75), ("Fim", "fim", 75), ("Intervalos", "intervalos", 210)):
-            ctk.CTkLabel(controls, text=label).pack(side="left", padx=(0, 4))
-            entry = ctk.CTkEntry(controls, width=width, placeholder_text="dd/mm/aaaa" if key == "data" else "")
-            entry.pack(side="left", padx=(0, 8))
-            entry.bind("<Return>", self._add_row_from_inputs)
-            self.inputs[key] = entry
-
-        ctk.CTkButton(controls, text="Adicionar", width=90, command=self._add_row_from_inputs).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(controls, text="Remover", width=90, command=self._remove_selected).pack(side="left")
 
         self.tree.pack(fill="both", expand=True, padx=6, pady=(2, 6))
         self.tree.bind("<Delete>", lambda _e: self._remove_selected())
         self.tree.bind("<Double-1>", self._begin_inline_edit)
 
-    def _add_row_from_inputs(self, _event=None):
-        raw = " | ".join(self.inputs[key].get().strip() for key in self.COLUMNS)
-        parsed = _parse_horarios_table(raw)
-        if not parsed:
-            return
-        self.tree.insert("", "end", values=parsed[0])
-        for entry in self.inputs.values():
-            entry.delete(0, "end")
+    def _add_empty_row(self):
+        row_id = self.tree.insert("", "end", values=["", "", "", ""])
+        self.tree.selection_set(row_id)
+        self.tree.focus(row_id)
         if self._on_change:
             self._on_change()
 
@@ -1347,16 +1340,12 @@ class HeaderTableEditor(ctk.CTkFrame):
 
         controls = ctk.CTkFrame(self, fg_color="transparent")
         controls.pack(fill="x", padx=6, pady=(6, 2))
-
-        self.inputs = {}
-        for label, key, width in (("Tópico", "topico", 230), ("Resposta", "resposta", 320)):
-            ctk.CTkLabel(controls, text=label).pack(side="left", padx=(0, 4))
-            entry = ctk.CTkEntry(controls, width=width)
-            entry.pack(side="left", padx=(0, 8), fill="x", expand=(key == "resposta"))
-            entry.bind("<KeyRelease>", self._sync_selected_row_from_inputs)
-            self.inputs[key] = entry
-
-        ctk.CTkButton(controls, text="Adicionar", width=90, command=self._add_row).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(
+            controls,
+            text="Edite direto na tabela (duplo clique na célula).",
+            text_color="#8a8a8a",
+        ).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(controls, text="Adicionar linha", width=120, command=self._add_empty_row).pack(side="left", padx=(0, 6))
         ctk.CTkButton(controls, text="Remover", width=90, command=self._remove_selected).pack(side="left")
 
         self.tree = ttk.Treeview(self, columns=self.COLUMNS, show="headings", height=9)
@@ -1366,54 +1355,13 @@ class HeaderTableEditor(ctk.CTkFrame):
         self.tree.column("resposta", width=420, anchor="w", stretch=True)
         self.tree.pack(fill="both", expand=True, padx=6, pady=(2, 6))
 
-        self.tree.bind("<<TreeviewSelect>>", self._load_selected_to_inputs)
         self.tree.bind("<Delete>", lambda _e: self._remove_selected())
         self.tree.bind("<Double-1>", self._begin_inline_edit)
 
-    def _collect_inputs(self):
-        return [self.inputs["topico"].get().strip(), self.inputs["resposta"].get().strip()]
-
-    def _clear_inputs(self):
-        for entry in self.inputs.values():
-            entry.delete(0, "end")
-
-    def _load_selected_to_inputs(self, _event=None):
-        selected = self.tree.selection()
-        if not selected:
-            return
-        values = list(self.tree.item(selected[0], "values"))
-        self._clear_inputs()
-        self.inputs["topico"].insert(0, values[0] if len(values) > 0 else "")
-        self.inputs["resposta"].insert(0, values[1] if len(values) > 1 else "")
-
-    def _add_row(self):
-        topico, resposta = self._collect_inputs()
-        if not topico:
-            return
-        self.tree.insert("", "end", values=[topico, resposta])
-        self._clear_inputs()
-        if self._on_change:
-            self._on_change()
-
-    def _update_selected(self):
-        selected = self.tree.selection()
-        if not selected:
-            return
-        topico, resposta = self._collect_inputs()
-        if not topico:
-            return
-        self.tree.item(selected[0], values=[topico, resposta])
-        if self._on_change:
-            self._on_change()
-
-    def _sync_selected_row_from_inputs(self, _event=None):
-        selected = self.tree.selection()
-        if not selected:
-            return
-        topico, resposta = self._collect_inputs()
-        if not topico:
-            return
-        self.tree.item(selected[0], values=[topico, resposta])
+    def _add_empty_row(self):
+        row_id = self.tree.insert("", "end", values=["", ""])
+        self.tree.selection_set(row_id)
+        self.tree.focus(row_id)
         if self._on_change:
             self._on_change()
 
@@ -1447,7 +1395,6 @@ class HeaderTableEditor(ctk.CTkFrame):
             if values[0]:
                 self.tree.item(row_id, values=values[:2])
                 self.tree.selection_set(row_id)
-                self._load_selected_to_inputs()
                 if self._on_change:
                     self._on_change()
             editor.destroy()
@@ -1468,7 +1415,6 @@ class HeaderTableEditor(ctk.CTkFrame):
             return
         for item in selected:
             self.tree.delete(item)
-        self._clear_inputs()
         if self._on_change:
             self._on_change()
 
