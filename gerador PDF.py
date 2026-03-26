@@ -40,6 +40,7 @@ PHOTO_LAYOUT_MODES = ["Dividir página", "Página inteira"]
 WATERMARK_MODES = ["Central", "Timbrado aleatório", "Central + Timbrado aleatório"]
 WATERMARK_RANDOM_COUNT_OPTIONS = ["4", "6", "8", "10", "12", "14", "16", "20"]
 HORARIOS_DESCRICAO_PRESETS = ["", "Hora técnica", "Deslocamento"]
+DOCUMENT_TYPES = ["Relatório técnico", "Certificado de treinamento"]
 
 INFO_ALIASES = {
     "equipamento": "equipamento",
@@ -841,57 +842,6 @@ def gerar_pdf(
 
     def _draw_page_chrome(canvas_obj, page_number):
         canvas_obj.saveState()
-        wm_path = str(watermark_path or "").strip()
-        if wm_path and os.path.exists(wm_path):
-            try:
-                op = max(0.02, min(0.95, float(watermark_opacity)))
-            except Exception:
-                op = 0.12
-            try:
-                scale = max(0.2, min(2.5, float(watermark_scale)))
-            except Exception:
-                scale = 0.75
-            try:
-                image = ImageReader(wm_path)
-                iw, ih = image.getSize()
-                wm_mode = str(watermark_mode or "Central")
-                apply_random = wm_mode in ("Timbrado aleatório", "Central + Timbrado aleatório")
-                apply_central = wm_mode in ("Central", "Central + Timbrado aleatório")
-                if apply_random:
-                    import random
-
-                    rng = random.Random(page_number * 1777)
-                    logos = max(1, min(60, int(watermark_random_count)))
-                    min_factor = max(0.07, 0.11 * scale)
-                    max_factor = max(min_factor + 0.02, min(0.28, 0.19 * scale + 0.08))
-                    for _ in range(logos):
-                        factor = rng.uniform(min_factor, max_factor)
-                        draw_w = iw * factor
-                        draw_h = ih * factor
-                        max_x = max(1.0, A4[0] - draw_w)
-                        max_y = max(1.0, A4[1] - draw_h)
-                        x = rng.uniform(0, max_x)
-                        y = rng.uniform(0, max_y)
-                        rot = rng.uniform(-25, 25)
-                        canvas_obj.saveState()
-                        canvas_obj.setFillAlpha(max(0.02, min(0.30, op * 0.85)))
-                        canvas_obj.translate(x + draw_w / 2, y + draw_h / 2)
-                        canvas_obj.rotate(rot)
-                        canvas_obj.drawImage(image, -draw_w / 2, -draw_h / 2, draw_w, draw_h, preserveAspectRatio=True, mask="auto")
-                        canvas_obj.restoreState()
-                if apply_central:
-                    max_w = A4[0] * scale
-                    max_h = A4[1] * scale
-                    factor = min(max_w / iw, max_h / ih)
-                    draw_w = iw * factor
-                    draw_h = ih * factor
-                    x = (A4[0] - draw_w) / 2
-                    y = (A4[1] - draw_h) / 2
-                    canvas_obj.setFillAlpha(op)
-                    canvas_obj.drawImage(image, x, y, draw_w, draw_h, preserveAspectRatio=True, mask="auto")
-                    canvas_obj.setFillAlpha(1)
-            except Exception:
-                pass
         if page_number > 1:
             canvas_obj.setFillColor(colors.HexColor("#F5F8FB"))
             canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=0, fill=1)
@@ -934,25 +884,93 @@ def gerar_pdf(
 
     doc.build(story, canvasmaker=FinalPageCanvas)
 
+    def _make_watermark_background_pdf(content_pdf_path):
+        wm_path = str(watermark_path or "").strip()
+        if not wm_path or not os.path.exists(wm_path):
+            return None
+        try:
+            content_reader = PdfReader(content_pdf_path)
+            page_count = len(content_reader.pages)
+            if page_count <= 0:
+                return None
+            op = max(0.02, min(0.95, float(watermark_opacity)))
+            scale = max(0.2, min(2.5, float(watermark_scale)))
+            temp_wm = output_path + f".wm_{uuid.uuid4().hex[:8]}.pdf"
+            c = pdf_canvas.Canvas(temp_wm, pagesize=A4)
+            image = ImageReader(wm_path)
+            iw, ih = image.getSize()
+            wm_mode = str(watermark_mode or "Central")
+            apply_random = wm_mode in ("Timbrado aleatório", "Central + Timbrado aleatório")
+            apply_central = wm_mode in ("Central", "Central + Timbrado aleatório")
+            for page_number in range(1, page_count + 1):
+                if apply_random:
+                    import random
+
+                    rng = random.Random(page_number * 1777)
+                    logos = max(1, min(60, int(watermark_random_count)))
+                    min_factor = max(0.07, 0.11 * scale)
+                    max_factor = max(min_factor + 0.02, min(0.28, 0.19 * scale + 0.08))
+                    for _ in range(logos):
+                        factor = rng.uniform(min_factor, max_factor)
+                        draw_w = iw * factor
+                        draw_h = ih * factor
+                        max_x = max(1.0, A4[0] - draw_w)
+                        max_y = max(1.0, A4[1] - draw_h)
+                        x = rng.uniform(0, max_x)
+                        y = rng.uniform(0, max_y)
+                        rot = rng.uniform(-25, 25)
+                        c.saveState()
+                        c.setFillAlpha(max(0.02, min(0.30, op * 0.85)))
+                        c.translate(x + draw_w / 2, y + draw_h / 2)
+                        c.rotate(rot)
+                        c.drawImage(image, -draw_w / 2, -draw_h / 2, draw_w, draw_h, preserveAspectRatio=True, mask="auto")
+                        c.restoreState()
+                if apply_central:
+                    max_w = A4[0] * scale
+                    max_h = A4[1] * scale
+                    factor = min(max_w / iw, max_h / ih)
+                    draw_w = iw * factor
+                    draw_h = ih * factor
+                    x = (A4[0] - draw_w) / 2
+                    y = (A4[1] - draw_h) / 2
+                    c.saveState()
+                    c.setFillAlpha(op)
+                    c.drawImage(image, x, y, draw_w, draw_h, preserveAspectRatio=True, mask="auto")
+                    c.restoreState()
+                c.showPage()
+            c.save()
+            return temp_wm
+        except Exception:
+            return None
+
+    wm_background_pdf = _make_watermark_background_pdf(temp_pdf)
+
     template_path_real = template_path if template_path else ""
-    if template_path_real and os.path.exists(template_path_real):
-        template_reader = PdfReader(template_path_real)
-        content_reader = PdfReader(temp_pdf)
-        writer = PdfWriter()
+    content_reader = PdfReader(temp_pdf)
+    template_reader = PdfReader(template_path_real) if (template_path_real and os.path.exists(template_path_real)) else None
+    wm_reader = PdfReader(wm_background_pdf) if (wm_background_pdf and os.path.exists(wm_background_pdf)) else None
+    writer = PdfWriter()
 
-        template_base = template_reader.pages[0]
-        for page in content_reader.pages:
+    template_base = template_reader.pages[0] if template_reader else None
+    for idx, page in enumerate(content_reader.pages):
+        if template_base:
             writer.add_page(template_base)
-            out_page = writer.pages[-1]
-            out_page.merge_page(page)
+        elif wm_reader:
+            writer.add_page(wm_reader.pages[min(idx, len(wm_reader.pages) - 1)])
+        else:
+            writer.add_page(page)
+            continue
+        out_page = writer.pages[-1]
+        if wm_reader and template_base:
+            out_page.merge_page(wm_reader.pages[min(idx, len(wm_reader.pages) - 1)])
+        out_page.merge_page(page)
 
-        with open(output_path, "wb") as f:
-            writer.write(f)
+    with open(output_path, "wb") as f:
+        writer.write(f)
+    if os.path.exists(temp_pdf):
         os.remove(temp_pdf)
-    else:
-        if os.path.exists(output_path):
-            os.remove(output_path)
-        os.rename(temp_pdf, output_path)
+    if wm_background_pdf and os.path.exists(wm_background_pdf):
+        os.remove(wm_background_pdf)
 
 
 # =========================
@@ -1605,6 +1623,18 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
         self.chk_auto_var = tk.BooleanVar(value=bool(self.config_data.get("preview_auto", True)))
         ctk.CTkCheckBox(top, text="Prévia automática", variable=self.chk_auto_var, command=self._on_auto_preview_toggle).pack(side="left", padx=10)
+        current_doc_type = str(self.config_data.get("document_type", DOCUMENT_TYPES[0]))
+        if current_doc_type not in DOCUMENT_TYPES:
+            current_doc_type = DOCUMENT_TYPES[0]
+        self.document_type_var = tk.StringVar(value=current_doc_type)
+        ctk.CTkLabel(top, text="Modelo:").pack(side="left", padx=(10, 4))
+        ctk.CTkOptionMenu(
+            top,
+            variable=self.document_type_var,
+            values=DOCUMENT_TYPES,
+            width=240,
+            command=self._on_document_type_change,
+        ).pack(side="left")
 
         # Botão "Abrir PDF" — aparece só depois de gerar
         self._btn_abrir_pdf = ctk.CTkButton(top, text="📂 Abrir PDF", width=110, command=self._abrir_ultimo_pdf,
@@ -1622,6 +1652,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         # ── Barra de opções ─────────────────────────────────────────────
         options = ctk.CTkFrame(self, fg_color="transparent")
         options.pack(fill="x", padx=14, pady=(0, 6))
+        self.report_options_frame = options
 
         ctk.CTkLabel(options, text="Fotos:").pack(side="left")
         self.foto_cols_var = tk.StringVar(value=str(self.config_data.get("foto_cols", "2")))
@@ -1682,6 +1713,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         # ── Área principal ─────────────────────────────────────────────
         self._main = ctk.CTkFrame(self, fg_color="transparent")
         self._main.pack(fill="both", expand=True, padx=14, pady=(0, 6))
+        self.report_main_frame = self._main
 
         left = ctk.CTkFrame(self._main, fg_color="transparent")
         left.pack(side="left", fill="both", expand=True)
@@ -1757,6 +1789,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.status_label = ctk.CTkLabel(self, text="Pronto", anchor="w")
         self.status_label.pack(fill="x", padx=14, pady=(0, 8))
         self._build_drop_support()
+        self._build_certificate_screen()
 
         self.update_label()
         if not self._preview_visible:
@@ -1765,6 +1798,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.bind("<Configure>", self._on_resize)
         self._update_tecnico_label()
+        self._on_document_type_change(self.document_type_var.get())
 
         # Atalhos de teclado
         self.bind("<Control-g>", lambda e: self.generate())
@@ -1797,9 +1831,94 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             )
             btn.pack(side="left", padx=3)
 
+    def _build_certificate_screen(self):
+        self.certificate_frame = ctk.CTkFrame(self, fg_color="transparent")
+
+        header = ctk.CTkFrame(self.certificate_frame, fg_color="transparent")
+        header.pack(fill="x", padx=14, pady=(6, 6))
+        ctk.CTkLabel(
+            header,
+            text="Modelo: Certificado de treinamento (exemplo de tela)",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            header,
+            text="Preencha os campos-base. A geração deste modelo será implementada no próximo passo.",
+            text_color="#8EA1B2",
+        ).pack(anchor="w", pady=(2, 0))
+
+        form = ctk.CTkFrame(self.certificate_frame)
+        form.pack(fill="both", expand=True, padx=14, pady=(0, 8))
+
+        self.certificate_template_path_var = tk.StringVar(value=str(self.config_data.get("certificate_template_path", "")))
+        row1 = ctk.CTkFrame(form, fg_color="transparent")
+        row1.pack(fill="x", padx=10, pady=(10, 6))
+        ctk.CTkLabel(row1, text="Template padrão do certificado:", width=240, anchor="w").pack(side="left")
+        ctk.CTkEntry(row1, textvariable=self.certificate_template_path_var).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(row1, text="Carregar template", width=150, command=self.select_certificate_template).pack(side="left")
+
+        row2 = ctk.CTkFrame(form, fg_color="transparent")
+        row2.pack(fill="x", padx=10, pady=6)
+        ctk.CTkLabel(row2, text="Nome do treinado:", width=240, anchor="w").pack(side="left")
+        self.certificate_trainee_var = tk.StringVar(value=str(self.config_data.get("certificate_trainee_name", "")))
+        ctk.CTkEntry(row2, textvariable=self.certificate_trainee_var).pack(side="left", fill="x", expand=True)
+
+        row3 = ctk.CTkFrame(form, fg_color="transparent")
+        row3.pack(fill="x", padx=10, pady=6)
+        ctk.CTkLabel(row3, text="Nome do instrutor:", width=240, anchor="w").pack(side="left")
+        self.certificate_instructor_var = tk.StringVar(value=str(self.config_data.get("certificate_instructor_name", "")))
+        ctk.CTkEntry(row3, textvariable=self.certificate_instructor_var).pack(side="left", fill="x", expand=True)
+
+        row4 = ctk.CTkFrame(form, fg_color="transparent")
+        row4.pack(fill="both", expand=True, padx=10, pady=(6, 10))
+        ctk.CTkLabel(row4, text="Texto padrão do certificado:", anchor="w").pack(anchor="w")
+        self.certificate_text = ctk.CTkTextbox(row4, wrap="word", height=120)
+        self.certificate_text.pack(fill="x", pady=(4, 8))
+        self.certificate_text.insert("1.0", str(self.config_data.get("certificate_default_text", "")))
+
+        ctk.CTkLabel(row4, text="Assuntos abordados (contra capa):", anchor="w").pack(anchor="w")
+        self.certificate_topics = ctk.CTkTextbox(row4, wrap="word")
+        self.certificate_topics.pack(fill="both", expand=True, pady=(4, 0))
+        self.certificate_topics.insert("1.0", str(self.config_data.get("certificate_topics", "")))
+
+    def _on_document_type_change(self, selected_type):
+        selected = selected_type or DOCUMENT_TYPES[0]
+        if hasattr(self, "certificate_frame"):
+            self._persist_certificate_fields()
+        self.config_data["document_type"] = selected
+        if selected == "Certificado de treinamento":
+            self.report_options_frame.pack_forget()
+            self.report_main_frame.pack_forget()
+            self.certificate_frame.pack(fill="both", expand=True, padx=0, pady=(0, 0))
+            self._set_status("Modo certificado selecionado.")
+            self._preview_panel.show_status("Prévia indisponível neste exemplo de certificado.")
+        else:
+            self.certificate_frame.pack_forget()
+            self.report_options_frame.pack(fill="x", padx=14, pady=(0, 6))
+            self.report_main_frame.pack(fill="both", expand=True, padx=14, pady=(0, 6))
+            self._set_status("Modo relatório técnico selecionado.")
+            if self.chk_auto_var.get():
+                self.force_preview_update()
+
+    def select_certificate_template(self):
+        file = filedialog.askopenfilename(initialdir=self._pick_initial_dir(), filetypes=[("PDF", "*.pdf")])
+        if not file:
+            return
+        self.certificate_template_path_var.set(file)
+        self.config_data["certificate_template_path"] = file
+        self._remember_dir(file)
+        self._set_status("Template do certificado carregado.")
+
     # ── Helpers ───────────────────────────────────────────────────────
     def _set_status(self, msg):
         self.status_label.configure(text=msg)
+
+    def _persist_certificate_fields(self):
+        self.config_data["certificate_template_path"] = self.certificate_template_path_var.get().strip()
+        self.config_data["certificate_trainee_name"] = self.certificate_trainee_var.get().strip()
+        self.config_data["certificate_instructor_name"] = self.certificate_instructor_var.get().strip()
+        self.config_data["certificate_default_text"] = self.certificate_text.get("1.0", "end").strip()
+        self.config_data["certificate_topics"] = self.certificate_topics.get("1.0", "end").strip()
 
     def _ensure_tecnico_login(self):
         tecnico_salvo = str(self.config_data.get("default_tecnico", "")).strip()
@@ -2006,6 +2125,9 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             self.force_preview_update()
 
     def force_preview_update(self):
+        if self.document_type_var.get() == "Certificado de treinamento":
+            self._preview_panel.show_status("Prévia indisponível neste exemplo de certificado.")
+            return
         texto = self.text.get("1.0", "end").strip()
         sections = self._get_sections_from_ui() if texto else {}
         if not texto and not self.fotos:
@@ -2059,6 +2181,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             self._preview_panel.set_width(w)
 
     def _on_close(self):
+        self._persist_certificate_fields()
         self.config_data["window_geometry"] = self.geometry()
         self.config_data["preview_visible"] = self._preview_visible
         self.config_data["zoom_factor"] = self._preview_panel.get_zoom_factor()
@@ -2072,6 +2195,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data["watermark_random_count"] = str(self.watermark_random_count_var.get())
         self.config_data["cover_header_scale"] = str(self.cover_header_scale_var.get())
         self.config_data["signature_page"] = bool(self.signature_var.get())
+        self.config_data["document_type"] = self.document_type_var.get()
         save_config(self.config_data)
         self._engine.stop()
         self.destroy()
@@ -2265,6 +2389,15 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
     # ── GERAR PDF (em thread separada com validação) ───────────────────
     def generate(self):
+        if self.document_type_var.get() == "Certificado de treinamento":
+            self._persist_certificate_fields()
+            save_config(self.config_data)
+            messagebox.showinfo(
+                "Modelo em preparação",
+                "A tela de Certificado de treinamento foi criada.\n"
+                "A geração de PDF deste modelo será implementada no próximo passo.",
+            )
+            return
         texto = self.text.get("1.0", "end").strip()
         if not texto:
             messagebox.showerror("Erro", "Cole o texto primeiro.")
