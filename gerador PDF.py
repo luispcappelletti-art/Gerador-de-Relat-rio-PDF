@@ -435,21 +435,43 @@ def gerar_pdf(
 
     if dados:
         cover_scale = max(1.0, min(3.0, float(cover_header_scale or 1.8)))
-        cover_font_size = 10.2 * cover_scale
-        cover_padding = max(6, int(8 * cover_scale))
-        tabela = Table(dados, colWidths=[5 * cm, 10 * cm], repeatRows=0)
+        cover_font_size = min(13.5, 10.2 * cover_scale)
+        cover_padding = max(4, int(6 * cover_scale))
+        largura_total = A4[0] - (5.0 * cm)
+        largura_label = largura_total * 0.34
+        largura_valor = largura_total - largura_label
+        dados_tabela = [
+            [
+                Paragraph(f"<b>{label}</b>", ParagraphStyle(
+                    "HeaderLabelCell",
+                    parent=styles["Body"],
+                    fontName="Helvetica-Bold",
+                    fontSize=cover_font_size,
+                    leading=cover_font_size * 1.25,
+                    wordWrap="CJK",
+                )),
+                Paragraph(str(valor).strip(), ParagraphStyle(
+                    "HeaderValueCell",
+                    parent=styles["Body"],
+                    fontName="Helvetica",
+                    fontSize=cover_font_size,
+                    leading=cover_font_size * 1.25,
+                    wordWrap="CJK",
+                )),
+            ]
+            for label, valor in dados
+        ]
+        tabela = Table(dados_tabela, colWidths=[largura_label, largura_valor], repeatRows=0)
         tabela.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FCFDFE")),
             ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#C7D4DF")),
             ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DCE5EC")),
             ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E9F0F6")),
-            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), cover_font_size),
             ("LEFTPADDING", (0, 0), (-1, -1), cover_padding),
             ("RIGHTPADDING", (0, 0), (-1, -1), cover_padding),
-            ("TOPPADDING", (0, 0), (-1, -1), max(6, int(10 * cover_scale))),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), max(6, int(10 * cover_scale))),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), max(4, int(7 * cover_scale))),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), max(4, int(7 * cover_scale))),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ]))
         story.append(Spacer(1, max(1.4, (3.4 - cover_scale)) * cm))
         story.append(tabela)
@@ -562,7 +584,7 @@ def gerar_pdf(
             if modo == "Página inteira":
                 _flush_half_blocks()
                 bloco = _build_photo_block(foto, idx, largura_util)
-                story.append(bloco)
+                story.extend(bloco)
                 story.append(Spacer(1, 10))
             else:
                 pending_half_blocks.append(_build_photo_block(foto, idx, largura_metade))
