@@ -138,7 +138,7 @@ def load_config():
         "watermark_opacity": "0.12",
         "watermark_scale": "0.75",
         "cover_header_scale": "1.8",
-        "signature_page": False,
+        "signature_page": True,
         "recent_pdfs": [],
     }
     if os.path.exists(CONFIG_FILE):
@@ -1236,6 +1236,7 @@ class HorariosTableEditor(ctk.CTkFrame):
     def __init__(self, master, on_change=None, **kwargs):
         super().__init__(master, **kwargs)
         self._on_change = on_change
+        self._inline_editor = None
 
         self.tree = ttk.Treeview(self, columns=self.COLUMNS, show="headings", height=4)
         headings = ("Data", "Início", "Fim", "Intervalos")
@@ -1259,6 +1260,7 @@ class HorariosTableEditor(ctk.CTkFrame):
 
         self.tree.pack(fill="both", expand=True, padx=6, pady=(2, 6))
         self.tree.bind("<Delete>", lambda _e: self._remove_selected())
+        self.tree.bind("<Double-1>", self._begin_inline_edit)
 
     def _add_row_from_inputs(self, _event=None):
         raw = " | ".join(self.inputs[key].get().strip() for key in self.COLUMNS)
@@ -1280,6 +1282,48 @@ class HorariosTableEditor(ctk.CTkFrame):
         if self._on_change:
             self._on_change()
 
+    def _begin_inline_edit(self, event):
+        region = self.tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        row_id = self.tree.identify_row(event.y)
+        col_id = self.tree.identify_column(event.x)
+        if not row_id or not col_id:
+            return
+        bbox = self.tree.bbox(row_id, col_id)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+        col_index = int(col_id.replace("#", "")) - 1
+        values = list(self.tree.item(row_id, "values"))
+        while len(values) < len(self.COLUMNS):
+            values.append("")
+        if self._inline_editor:
+            self._inline_editor.destroy()
+            self._inline_editor = None
+        editor = ctk.CTkEntry(self.tree)
+        editor.insert(0, values[col_index])
+        editor.place(x=x, y=y, width=w, height=h)
+        editor.focus_set()
+        editor.select_range(0, "end")
+
+        def _save(_event=None):
+            values[col_index] = editor.get().strip()
+            self.tree.item(row_id, values=values)
+            editor.destroy()
+            self._inline_editor = None
+            if self._on_change:
+                self._on_change()
+
+        def _cancel(_event=None):
+            editor.destroy()
+            self._inline_editor = None
+
+        editor.bind("<Return>", _save)
+        editor.bind("<FocusOut>", _save)
+        editor.bind("<Escape>", _cancel)
+        self._inline_editor = editor
+
     def get_rows(self):
         return [list(self.tree.item(item, "values")) for item in self.tree.get_children("")]
 
@@ -1299,6 +1343,7 @@ class HeaderTableEditor(ctk.CTkFrame):
     def __init__(self, master, on_change=None, **kwargs):
         super().__init__(master, **kwargs)
         self._on_change = on_change
+        self._inline_editor = None
 
         controls = ctk.CTkFrame(self, fg_color="transparent")
         controls.pack(fill="x", padx=6, pady=(6, 2))
@@ -1308,10 +1353,10 @@ class HeaderTableEditor(ctk.CTkFrame):
             ctk.CTkLabel(controls, text=label).pack(side="left", padx=(0, 4))
             entry = ctk.CTkEntry(controls, width=width)
             entry.pack(side="left", padx=(0, 8), fill="x", expand=(key == "resposta"))
+            entry.bind("<KeyRelease>", self._sync_selected_row_from_inputs)
             self.inputs[key] = entry
 
         ctk.CTkButton(controls, text="Adicionar", width=90, command=self._add_row).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(controls, text="Atualizar", width=90, command=self._update_selected).pack(side="left", padx=(0, 6))
         ctk.CTkButton(controls, text="Remover", width=90, command=self._remove_selected).pack(side="left")
 
         self.tree = ttk.Treeview(self, columns=self.COLUMNS, show="headings", height=9)
@@ -1323,6 +1368,7 @@ class HeaderTableEditor(ctk.CTkFrame):
 
         self.tree.bind("<<TreeviewSelect>>", self._load_selected_to_inputs)
         self.tree.bind("<Delete>", lambda _e: self._remove_selected())
+        self.tree.bind("<Double-1>", self._begin_inline_edit)
 
     def _collect_inputs(self):
         return [self.inputs["topico"].get().strip(), self.inputs["resposta"].get().strip()]
@@ -1359,6 +1405,62 @@ class HeaderTableEditor(ctk.CTkFrame):
         self.tree.item(selected[0], values=[topico, resposta])
         if self._on_change:
             self._on_change()
+
+    def _sync_selected_row_from_inputs(self, _event=None):
+        selected = self.tree.selection()
+        if not selected:
+            return
+        topico, resposta = self._collect_inputs()
+        if not topico:
+            return
+        self.tree.item(selected[0], values=[topico, resposta])
+        if self._on_change:
+            self._on_change()
+
+    def _begin_inline_edit(self, event):
+        region = self.tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        row_id = self.tree.identify_row(event.y)
+        col_id = self.tree.identify_column(event.x)
+        if not row_id or not col_id:
+            return
+        bbox = self.tree.bbox(row_id, col_id)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+        col_index = int(col_id.replace("#", "")) - 1
+        values = list(self.tree.item(row_id, "values"))
+        while len(values) < len(self.COLUMNS):
+            values.append("")
+        if self._inline_editor:
+            self._inline_editor.destroy()
+            self._inline_editor = None
+        editor = ctk.CTkEntry(self.tree)
+        editor.insert(0, values[col_index])
+        editor.place(x=x, y=y, width=w, height=h)
+        editor.focus_set()
+        editor.select_range(0, "end")
+
+        def _save(_event=None):
+            values[col_index] = editor.get().strip()
+            if values[0]:
+                self.tree.item(row_id, values=values[:2])
+                self.tree.selection_set(row_id)
+                self._load_selected_to_inputs()
+                if self._on_change:
+                    self._on_change()
+            editor.destroy()
+            self._inline_editor = None
+
+        def _cancel(_event=None):
+            editor.destroy()
+            self._inline_editor = None
+
+        editor.bind("<Return>", _save)
+        editor.bind("<FocusOut>", _save)
+        editor.bind("<Escape>", _cancel)
+        self._inline_editor = editor
 
     def _remove_selected(self):
         selected = self.tree.selection()
@@ -1400,7 +1502,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data.setdefault("zoom_factor", 1.0)
         self.config_data.setdefault("last_dir", "")
         self.config_data.setdefault("default_tecnico", "")
-        self.config_data.setdefault("signature_page", False)
+        self.config_data.setdefault("signature_page", True)
         self.config_data.setdefault("recent_pdfs", [])
 
         self.fotos = []
