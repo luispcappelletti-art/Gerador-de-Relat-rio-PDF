@@ -81,7 +81,6 @@ INFO_FIELDS = [
     ("Tempo Atendimento", "tempo_atendimento"),
     ("Tempo Espera", "tempo_espera"),
 ]
-
 MANDATORY_INFO_FIELDS = ("tecnico", "cliente")
 
 
@@ -126,14 +125,19 @@ def normalize(text):
 
 
 def parse_text(text):
-    sections = {"info": {}}
+    sections = {"info": {}, "info_extra": []}
 
     for line in text.splitlines():
         if ":" in line:
             k, v = line.split(":", 1)
             key = normalize(k)
+            value = v.strip()
+            if not value:
+                continue
             if key in INFO_ALIASES:
-                sections["info"][INFO_ALIASES[key]] = v.strip()
+                sections["info"][INFO_ALIASES[key]] = value
+            else:
+                sections["info_extra"].append((k.strip(), value))
 
     parts = re.split(r"\n\s*(\d+\s*[–-]\s*.+)", text)
 
@@ -280,8 +284,11 @@ def _extract_section_body(raw_text, section_key):
 
 def _compose_full_text_with_sections(base_text, sections):
     header_pattern = re.compile(r"^\s*\d+\s*[–-]\s*.+$")
-    if sections.get("info"):
-        info_lines = _compose_info_text(sections.get("info", {})).splitlines()
+    if sections.get("info") or sections.get("info_extra"):
+        info_lines = _compose_info_text(
+            sections.get("info", {}),
+            sections.get("info_extra", []),
+        ).splitlines()
     else:
         info_lines = []
         for line in (base_text or "").splitlines():
@@ -302,8 +309,9 @@ def _compose_full_text_with_sections(base_text, sections):
     return "\n\n".join(block for block in blocks if block).strip()
 
 
-def _compose_info_text(info, include_required_empty=False):
+def _compose_info_text(info, info_extra=None, include_required_empty=False):
     info = info or {}
+    info_extra = info_extra or []
     lines = []
     for label, key in INFO_FIELDS:
         value = info.get(key)
@@ -311,22 +319,29 @@ def _compose_info_text(info, include_required_empty=False):
             lines.append(f"{label}: {str(value).strip()}")
         elif include_required_empty and key in MANDATORY_INFO_FIELDS:
             lines.append(f"{label}: ")
+    for label, value in info_extra:
+        if _valor_info_preenchido(value):
+            lines.append(f"{str(label).strip()}: {str(value).strip()}")
     return "\n".join(lines).strip()
 
 
 def _parse_info_from_editor(text):
     info = {}
+    info_extra = []
     for line in (text or "").splitlines():
         if ":" not in line:
             continue
         k, v = line.split(":", 1)
         normalized_key = normalize(k)
+        value = v.strip()
+        if not value:
+            continue
         info_key = INFO_ALIASES.get(normalized_key)
         if info_key:
-            value = v.strip()
-            if value:
-                info[info_key] = value
-    return info
+            info[info_key] = value
+        else:
+            info_extra.append((k.strip(), value))
+    return info, info_extra
 
 
 def _parse_header_info_text(text):
@@ -1288,7 +1303,9 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         texto = limpar_texto(self.text.get("1.0", "end").strip())
         sections = parse_text(texto)
         cabecalho = self.section_widgets["cabecalho"].get("1.0", "end")
-        sections["info"] = _parse_info_from_editor(cabecalho)
+        info, info_extra = _parse_info_from_editor(cabecalho)
+        sections["info"] = info
+        sections["info_extra"] = info_extra
         tecnico_salvo = str(self.config_data.get("default_tecnico", "")).strip()
         if tecnico_salvo and not _valor_info_preenchido(sections["info"].get("tecnico")):
             sections["info"]["tecnico"] = tecnico_salvo
@@ -1318,7 +1335,11 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             for key, box in self.section_widgets.items():
                 if key == "cabecalho":
                     box.delete("1.0", "end")
-                    composed = _compose_info_text(sections.get("info", {}), include_required_empty=True)
+                    composed = _compose_info_text(
+                        sections.get("info", {}),
+                        sections.get("info_extra", []),
+                        include_required_empty=True,
+                    )
                     box.insert("1.0", composed)
                     box.edit_modified(False)
                 elif key == "horarios":
