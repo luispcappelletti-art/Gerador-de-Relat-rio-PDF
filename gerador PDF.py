@@ -373,25 +373,16 @@ def _parse_info_from_editor(text):
 
 
 def _parse_header_info_text(text):
-    return _parse_info_from_editor(text)
+    info, _ = _parse_info_from_editor(text)
+    return info
 
 
-def _compose_header_rows(info, info_extra):
+def _compose_header_rows(info, info_extra=None):
     info = info or {}
-    info_extra = info_extra or []
     rows = []
-    used_labels = set()
     for label, key in HEADER_DEFAULT_ROWS:
         value = str(info.get(key, "") or "").strip()
         rows.append([label, value])
-        used_labels.add(normalize(label))
-    for label, value in info_extra:
-        raw_label = str(label or "").strip()
-        if not raw_label:
-            continue
-        if normalize(raw_label) in used_labels:
-            continue
-        rows.append([raw_label, str(value or "").strip()])
     return rows
 
 
@@ -704,13 +695,14 @@ def gerar_pdf(
                 canvas_obj.setFillAlpha(1)
             except Exception:
                 pass
-        canvas_obj.setFillColor(colors.HexColor("#F5F8FB"))
-        canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=0, fill=1)
-        canvas_obj.setStrokeColor(colors.HexColor("#D1DCE6"))
-        canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=1, fill=0)
-        canvas_obj.setFont("Helvetica-Bold", 12)
-        canvas_obj.setFillColor(colors.HexColor("#0E2A44"))
-        canvas_obj.drawCentredString(A4[0] / 2, A4[1] - 1.95 * cm, "RELATÓRIO TÉCNICO DE ATENDIMENTO")
+        if page_number > 1:
+            canvas_obj.setFillColor(colors.HexColor("#F5F8FB"))
+            canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=0, fill=1)
+            canvas_obj.setStrokeColor(colors.HexColor("#D1DCE6"))
+            canvas_obj.rect(2.3 * cm, A4[1] - 2.65 * cm, A4[0] - (4.6 * cm), 1.2 * cm, stroke=1, fill=0)
+            canvas_obj.setFont("Helvetica-Bold", 12)
+            canvas_obj.setFillColor(colors.HexColor("#0E2A44"))
+            canvas_obj.drawCentredString(A4[0] / 2, A4[1] - 1.95 * cm, "RELATÓRIO TÉCNICO DE ATENDIMENTO")
 
         canvas_obj.setFont("Helvetica", 8.8)
         canvas_obj.setFillColor(colors.HexColor("#5B6E7D"))

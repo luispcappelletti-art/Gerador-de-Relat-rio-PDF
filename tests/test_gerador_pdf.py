@@ -66,6 +66,16 @@ class ListaEInfoTests(unittest.TestCase):
         self.assertEqual(horarios[0], ["25/03/2026", "08:00", "12:00", "almoço"])
         self.assertEqual(horarios[1], ["25/03/2026", "13:00", "18:00", ""])
 
+    def test_compose_header_rows_mantem_apenas_topicos_padrao(self):
+        rows = gerador_pdf._compose_header_rows(
+            {"cliente": "ACME", "tecnico": "Ana"},
+            [("Pergunta aleatória", "Resposta")],
+        )
+        labels = [row[0] for row in rows]
+        self.assertIn("Nome do Cliente", labels)
+        self.assertIn("Técnico Responsável", labels)
+        self.assertNotIn("Pergunta aleatória", labels)
+
 
 if __name__ == "__main__":
     unittest.main()
