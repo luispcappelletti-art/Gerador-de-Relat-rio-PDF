@@ -2,7 +2,7 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from tkinter import ttk
-import json, os, re, unicodedata, threading, tempfile
+import json, os, re, unicodedata, threading, tempfile, subprocess, sys
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -14,7 +14,7 @@ from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.pdfbase import pdfmetrics
 
 from pypdf import PdfReader, PdfWriter
-import fitz  # pymupdf — instale com: pip install pymupdf
+import fitz  # pymupdf
 from PIL import Image as PILImage, ImageTk
 
 try:
@@ -59,8 +59,12 @@ INFO_ALIASES = {
     "acompanhamento remoto": "acompanhamento",
     "acompanhamento": "acompanhamento",
     "horario de inicio": "inicio",
+    "horário de início": "inicio",
+    "horario de início": "inicio",
     "inicio": "inicio",
+    "início": "inicio",
     "horario de termino": "fim",
+    "horário de término": "fim",
     "fim": "fim",
     "tempo do atendimento": "tempo_atendimento",
     "tempo atendimento": "tempo_atendimento",
@@ -112,6 +116,8 @@ HEADER_DEFAULT_ROWS = [
     ("Motivo do chamado", "motivo_chamado"),
 ]
 
+MAX_RECENT = 7
+
 
 # =========================
 # CONFIG
@@ -132,6 +138,8 @@ def load_config():
         "watermark_opacity": "0.12",
         "watermark_scale": "0.75",
         "cover_header_scale": "1.8",
+        "signature_page": False,
+        "recent_pdfs": [],
     }
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -145,12 +153,38 @@ def save_config(config):
         json.dump(config, f, ensure_ascii=False, indent=2)
 
 
+def add_recent_pdf(config, path):
+    recents = config.get("recent_pdfs", [])
+    if path in recents:
+        recents.remove(path)
+    recents.insert(0, path)
+    config["recent_pdfs"] = recents[:MAX_RECENT]
+    save_config(config)
+
+
 # =========================
-# PARSER
+# PARSER  (melhorado)
 # =========================
 def normalize(text):
     text = unicodedata.normalize("NFKD", text)
     return "".join(c for c in text if not unicodedata.combining(c)).lower().strip()
+
+
+def _section_number(text):
+    """Extrai o número inicial de um título de seção normalizado, ex: '1' de '1 – escopo...'"""
+    m = re.match(r"^(\d+)", normalize(text))
+    return m.group(1) if m else None
+
+
+# Mapeamento: número da seção → chave interna
+SECTION_NUMBER_MAP = {
+    "1": "descricao",
+    "2": "detalhamento",
+    "3": "diagnostico",
+    "4": "acoes",
+    "5": "resultado",
+    "6": "estado",
+}
 
 
 def parse_text(text):
@@ -164,36 +198,47 @@ def parse_text(text):
             if not value:
                 continue
             if key in INFO_ALIASES:
-                sections["info"][INFO_ALIASES[key]] = value
+                field_key = INFO_ALIASES[key]
+                sections["info"][field_key] = value
+                # Auto-populate header fields from parsed info
+                _try_autofill_header(sections, field_key, value)
             else:
                 sections["info_extra"].append((k.strip(), value))
 
-    parts = re.split(r"\n\s*(\d+\s*[–-]\s*.+)", text)
+    # Split on numbered section headings (tolerant: "1 –", "1 -", "1." etc.)
+    parts = re.split(r"\n\s*(\d+\s*[–\-\.]\s*.+)", text)
 
     for i in range(1, len(parts), 2):
-        title = normalize(parts[i])
+        title_raw = parts[i]
         content = parts[i + 1].strip()
-
-        if "descricao" in title:
-            sections["descricao"] = content
-        elif "detalhamento" in title:
-            sections["detalhamento"] = content
-        elif "diagnostico" in title:
-            sections["diagnostico"] = content
-        elif "acoes" in title:
-            sections["acoes"] = content
-        elif "resultado" in title:
-            sections["resultado"] = content
-        elif "estado" in title:
-            sections["estado"] = content
+        num = _section_number(title_raw)
+        if num and num in SECTION_NUMBER_MAP:
+            key = SECTION_NUMBER_MAP[num]
+            sections[key] = content
 
     return sections
+
+
+def _try_autofill_header(sections, field_key, value):
+    """Tenta preencher campos do cabeçalho a partir de campos de info parseados."""
+    mapping = {
+        "inicio": "data_inicio",
+        "fim": "data_final",
+        "data": "data_inicio",
+        "motivo_chamado": "motivo_chamado",
+    }
+    if field_key in mapping:
+        target = mapping[field_key]
+        if not sections["info"].get(target):
+            sections["info"][target] = value
 
 
 def limpar_texto(texto):
     texto = re.sub(r"\*\*(.*?)\*\*", r"\1", texto)
     texto = re.sub(r"#+\s*", "", texto)
     texto = re.sub(r"---+", "", texto)
+    texto = re.sub(r"━+", "", texto)          # ← remove separadores ━━━
+    texto = re.sub(r"📄\s*", "", texto)       # ← remove emoji de cabeçalho
     texto = re.sub(r"\*(\s*)", "", texto)
 
     substituicoes = {
@@ -209,7 +254,7 @@ def limpar_texto(texto):
 
 
 # =========================
-# LISTAS AUTOMÁTICAS
+# LISTAS AUTOMÁTICAS  (melhoradas — suporte a listas aninhadas)
 # =========================
 def _linha_tem_topico(linha):
     return bool(re.match(r"^(\d+[\.\)]|-|•|\u2022|°)\s*", linha.strip()))
@@ -227,63 +272,74 @@ def _valor_info_preenchido(valor):
 
 
 def processar_lista(texto, styles):
+    """
+    Processa texto em elementos ReportLab com suporte a:
+    - Listas com marcadores explícitos (-, •, 1., 2.)
+    - Listas numeradas com indentação
+    - Parágrafos separados por linha em branco
+    - Sub-grupos separados por ponto final
+    """
     elementos = []
-    linhas = [linha.strip() for linha in texto.split("\n") if linha.strip()]
-    if not linhas:
+    if not texto or not texto.strip():
         return [Spacer(1, 10)]
 
-    tem_topicos_explicitos = any(_linha_tem_topico(linha) for linha in linhas)
-    itens = []
-    item_atual = ""
+    # Separar por linhas em branco em blocos
+    blocos = re.split(r"\n\s*\n", texto.strip())
 
-    def adicionar_item(item):
-        texto_item = item.strip()
-        if texto_item:
-            itens.append(texto_item)
-
-    for linha in linhas:
-        if tem_topicos_explicitos and _linha_tem_topico(linha):
-            if item_atual:
-                adicionar_item(item_atual)
-            item_atual = _limpar_marcador_topico(linha)
+    for bloco in blocos:
+        linhas = [l.strip() for l in bloco.splitlines() if l.strip()]
+        if not linhas:
             continue
 
-        if item_atual:
-            if tem_topicos_explicitos:
-                item_atual += " " + linha
-            else:
-                if item_atual.rstrip().endswith("."):
-                    adicionar_item(item_atual)
-                    item_atual = linha
+        tem_topicos = any(_linha_tem_topico(l) for l in linhas)
+
+        if tem_topicos:
+            itens = []
+            item_atual = ""
+
+            for linha in linhas:
+                if _linha_tem_topico(linha):
+                    if item_atual:
+                        itens.append(item_atual.strip())
+                    item_atual = _limpar_marcador_topico(linha)
                 else:
-                    item_atual += " " + linha
+                    item_atual += " " + linha if item_atual else linha
+
+            if item_atual:
+                itens.append(item_atual.strip())
+
+            if itens:
+                lista = [
+                    ListItem(
+                        Paragraph(item, styles["Body"]),
+                        leftIndent=12,
+                        bulletText="°"
+                    )
+                    for item in itens if item
+                ]
+                elementos.append(
+                    ListFlowable(
+                        lista,
+                        bulletType='bullet',
+                        leftIndent=8,
+                        bulletFontName="Helvetica",
+                        bulletFontSize=10
+                    )
+                )
         else:
-            item_atual = _limpar_marcador_topico(linha) if tem_topicos_explicitos else linha
+            # Texto corrido: verificar se tem múltiplas frases para separar
+            texto_bloco = " ".join(linhas)
+            # Dividir por ponto + maiúscula como heurística de frases
+            frases = re.split(r'(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÀÃÕÇ])', texto_bloco)
+            for frase in frases:
+                frase = frase.strip()
+                if frase:
+                    elementos.append(Paragraph(frase, styles["Body"]))
+                    elementos.append(Spacer(1, 3))
 
-    if item_atual:
-        adicionar_item(item_atual)
+        elementos.append(Spacer(1, 6))
 
-    if itens:
-        lista = [
-            ListItem(
-                Paragraph(item, styles["Body"]),
-                leftIndent=12,
-                bulletText="°"
-            )
-            for item in itens
-        ]
-        elementos.append(
-            ListFlowable(
-                lista,
-                bulletType='bullet',
-                leftIndent=8,
-                bulletFontName="Helvetica",
-                bulletFontSize=10
-            )
-        )
-
-    elementos.append(Spacer(1, 10))
-    return elementos
+    return elementos if elementos else [Spacer(1, 10)]
 
 
 # =========================
@@ -448,6 +504,9 @@ def _parse_horarios_table(raw_text):
         if len(parts) == 3:
             parts.append("")
         date, inicio, fim, intervalos = parts[:4]
+        # ← MELHORIA: só inclui linha se tiver pelo menos data ou horário válido
+        if not date and not inicio and not fim:
+            continue
         linhas.append([
             _normalize_date(date),
             _normalize_time(inicio),
@@ -466,6 +525,95 @@ def _compose_horarios_table_text(rows=None):
     return "\n".join(lines)
 
 
+# =========================
+# PÁGINA DE ASSINATURA
+# =========================
+def _build_signature_page(styles, info=None):
+    """Constrói a página de assinatura do técnico e cliente."""
+    info = info or {}
+    tecnico = str(info.get("tecnico", "") or "").strip()
+    cliente = str(info.get("cliente", "") or "").strip()
+
+    story = []
+    story.append(Spacer(1, 2.5 * cm))
+    story.append(Paragraph("<b>ASSINATURA E CONFIRMAÇÃO DO ATENDIMENTO</b>", styles["Secao"]))
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph(
+        "Declaro que os serviços descritos neste relatório foram realizados conforme acordado "
+        "e que as informações aqui contidas são verdadeiras.",
+        styles["Body"]
+    ))
+    story.append(Spacer(1, 1.8 * cm))
+
+    largura_util = A4[0] - (5.0 * cm)
+    col_w = (largura_util - 1.5 * cm) / 2
+
+    linha_style = ParagraphStyle(
+        "AssinaturaLabel",
+        parent=styles["Body"],
+        fontSize=9.5,
+        textColor=colors.HexColor("#4A5568"),
+        alignment=1,
+    )
+    nome_style = ParagraphStyle(
+        "AssinaturaNome",
+        parent=styles["Body"],
+        fontSize=10,
+        fontName="Helvetica-Bold",
+        textColor=colors.HexColor("#0E2A44"),
+        alignment=1,
+        spaceAfter=2,
+    )
+
+    dados_assinatura = [
+        [
+            [
+                Spacer(1, 1.8 * cm),
+                HRFlowable(width=col_w * 0.85, thickness=1, color=colors.HexColor("#9FB3C7"), hAlign="CENTER"),
+                Spacer(1, 5),
+                Paragraph(f"<b>{tecnico or 'Técnico Responsável'}</b>", nome_style),
+                Paragraph("Técnico / Assistência Técnica", linha_style),
+            ],
+            [
+                Spacer(1, 1.8 * cm),
+                HRFlowable(width=col_w * 0.85, thickness=1, color=colors.HexColor("#9FB3C7"), hAlign="CENTER"),
+                Spacer(1, 5),
+                Paragraph(f"<b>{cliente or 'Cliente'}</b>", nome_style),
+                Paragraph("Responsável pelo Cliente", linha_style),
+            ],
+        ]
+    ]
+
+    tbl = Table(dados_assinatura, colWidths=[col_w, col_w])
+    tbl.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(tbl)
+    story.append(Spacer(1, 2.0 * cm))
+
+    # Campo de data/local
+    story.append(Paragraph("Local e Data: _______________________________________", styles["Body"]))
+    story.append(Spacer(1, 1.5 * cm))
+
+    # Observações
+    story.append(Paragraph("<b>Observações:</b>", ParagraphStyle(
+        "ObsLabel", parent=styles["Body"], fontName="Helvetica-Bold", fontSize=10
+    )))
+    story.append(Spacer(1, 0.3 * cm))
+    for _ in range(4):
+        story.append(HRFlowable(width=largura_util, thickness=0.5, color=colors.HexColor("#C5D0DC")))
+        story.append(Spacer(1, 0.55 * cm))
+
+    return story
+
+
+# =========================
+# GERADOR PDF PRINCIPAL
+# =========================
 def gerar_pdf(
     sections,
     template_path,
@@ -479,6 +627,7 @@ def gerar_pdf(
     watermark_opacity=0.12,
     watermark_scale=0.75,
     cover_header_scale=1.8,
+    include_signature_page=False,
 ):
     import uuid
     temp_pdf = output_path + f".tmp_{uuid.uuid4().hex[:8]}.pdf"
@@ -493,11 +642,9 @@ def gerar_pdf(
     styles.add(ParagraphStyle(name="CoverTitle",
                               fontSize=28, alignment=1, spaceAfter=12,
                               textColor=colors.HexColor("#0A2238"), leading=32, fontName="Helvetica-Bold"))
-
     styles.add(ParagraphStyle(name="Secao",
                               fontSize=12.5, spaceBefore=14, spaceAfter=7,
                               textColor=colors.HexColor("#123A5A"), leading=15, keepWithNext=True))
-
     styles.add(ParagraphStyle(name="Body",
                               fontSize=10.5, leading=15, textColor=colors.HexColor("#1F2B37")))
 
@@ -586,7 +733,8 @@ def gerar_pdf(
     if sections.get("estado"):
         add_secao("6 – ESTADO FINAL", sections["estado"], "estado")
 
-    horarios = horarios or []
+    # Tabela de horários — só inclui se tiver linhas válidas
+    horarios = [r for r in (horarios or []) if any(str(c).strip() for c in r)]
     if horarios:
         story.append(Paragraph("<b>TABELA DE HORÁRIOS DO ATENDIMENTO</b>", styles["Secao"]))
         story.append(Spacer(1, 8))
@@ -673,6 +821,11 @@ def gerar_pdf(
                 if len(pending_half_blocks) == 2:
                     _flush_half_blocks()
         _flush_half_blocks()
+
+    # ← NOVA: Página de assinatura
+    if include_signature_page:
+        story.append(PageBreak())
+        story.extend(_build_signature_page(styles, info=info))
 
     def _draw_page_chrome(canvas_obj, page_number):
         canvas_obj.saveState()
@@ -765,11 +918,47 @@ def gerar_pdf(
 
 
 # =========================
+# VALIDAÇÃO
+# =========================
+def validar_sections(sections, fotos):
+    """Retorna lista de avisos de validação (strings). Lista vazia = tudo OK."""
+    avisos = []
+    info = sections.get("info", {})
+
+    if not _valor_info_preenchido(info.get("tecnico")):
+        avisos.append("Técnico responsável não preenchido.")
+    if not _valor_info_preenchido(info.get("cliente")):
+        avisos.append("Nome do cliente não preenchido.")
+    if not sections.get("descricao"):
+        avisos.append("Seção '1 – Escopo do Atendimento' está vazia.")
+
+    for idx, foto in enumerate(fotos or [], start=1):
+        path = foto.get("path", "")
+        if path and not os.path.exists(path):
+            avisos.append(f"Foto {idx} não encontrada: {os.path.basename(path)}")
+
+    return avisos
+
+
+# =========================
+# ABRIR PDF (multiplataforma)
+# =========================
+def abrir_pdf(path):
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)
+        elif sys.platform.startswith("darwin"):
+            subprocess.run(["open", path], check=False)
+        else:
+            subprocess.run(["xdg-open", path], check=False)
+    except Exception:
+        pass
+
+
+# =========================
 # PREVIEW ENGINE
 # =========================
 class PreviewEngine:
-    """Gera imagens de pré-visualização do PDF num thread em segundo plano com debounce."""
-
     def __init__(self, on_update, debounce_ms=1000):
         self.on_update = on_update
         self.debounce_ms = debounce_ms
@@ -787,6 +976,7 @@ class PreviewEngine:
         self._current_watermark_opacity = 0.12
         self._current_watermark_scale = 0.75
         self._current_cover_header_scale = 1.8
+        self._current_signature_page = False
         self._temp_dir = tempfile.mkdtemp()
         self._running = True
 
@@ -804,6 +994,7 @@ class PreviewEngine:
         watermark_opacity=0.12,
         watermark_scale=0.75,
         cover_header_scale=1.8,
+        include_signature_page=False,
     ):
         with self._lock:
             self._current_text = text
@@ -818,6 +1009,7 @@ class PreviewEngine:
             self._current_watermark_opacity = watermark_opacity
             self._current_watermark_scale = watermark_scale
             self._current_cover_header_scale = cover_header_scale
+            self._current_signature_page = include_signature_page
             if self._timer is not None:
                 self._timer.cancel()
             self._timer = threading.Timer(self.debounce_ms / 1000.0, self._generate)
@@ -840,6 +1032,7 @@ class PreviewEngine:
             watermark_opacity = self._current_watermark_opacity
             watermark_scale = self._current_watermark_scale
             cover_header_scale = self._current_cover_header_scale
+            include_signature_page = self._current_signature_page
 
         import uuid
         temp_pdf = os.path.join(self._temp_dir, f"preview_{uuid.uuid4().hex[:8]}.pdf")
@@ -860,6 +1053,7 @@ class PreviewEngine:
                 watermark_opacity=watermark_opacity,
                 watermark_scale=watermark_scale,
                 cover_header_scale=cover_header_scale,
+                include_signature_page=include_signature_page,
             )
 
             doc = fitz.open(temp_pdf)
@@ -1190,6 +1384,9 @@ class HeaderTableEditor(ctk.CTkFrame):
             self.tree.delete(item)
 
 
+# =========================
+# APP PRINCIPAL
+# =========================
 class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -1203,12 +1400,16 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data.setdefault("zoom_factor", 1.0)
         self.config_data.setdefault("last_dir", "")
         self.config_data.setdefault("default_tecnico", "")
+        self.config_data.setdefault("signature_page", False)
+        self.config_data.setdefault("recent_pdfs", [])
 
         self.fotos = []
         self._thumb_cache = []
         self._suspend_section_events = False
+        self._last_generated_pdf = ""
         self._ensure_tecnico_login()
 
+        # ── Barra superior ──────────────────────────────────────────────
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=14, pady=(10, 4))
 
@@ -1223,57 +1424,68 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         ctk.CTkButton(top, text="Atualizar prévia", width=130, command=self.force_preview_update).pack(side="left", padx=4)
 
         self.chk_auto_var = tk.BooleanVar(value=bool(self.config_data.get("preview_auto", True)))
-        ctk.CTkCheckBox(top, text="Atualizar prévia automaticamente", variable=self.chk_auto_var, command=self._on_auto_preview_toggle).pack(side="left", padx=10)
+        ctk.CTkCheckBox(top, text="Prévia automática", variable=self.chk_auto_var, command=self._on_auto_preview_toggle).pack(side="left", padx=10)
 
-        ctk.CTkButton(top, text="Gerar PDF", width=120, command=self.generate).pack(side="right", padx=4)
+        # Botão "Abrir PDF" — aparece só depois de gerar
+        self._btn_abrir_pdf = ctk.CTkButton(top, text="📂 Abrir PDF", width=110, command=self._abrir_ultimo_pdf,
+                                             fg_color="#2A6040", hover_color="#1E4A30")
+        # não pack ainda — aparece após gerar
+
+        ctk.CTkButton(top, text="Gerar PDF", width=120, command=self.generate,
+                      fg_color="#1A4A7A", hover_color="#133A62").pack(side="right", padx=4)
         ctk.CTkButton(top, text="Limpar", width=90, command=self._limpar).pack(side="right", padx=4)
 
         self._preview_visible = bool(self.config_data.get("preview_visible", True))
         self._toggle_btn = ctk.CTkButton(top, text="◀ Ocultar prévia", width=130, command=self._toggle_preview)
         self._toggle_btn.pack(side="right", padx=8)
 
+        # ── Barra de opções ─────────────────────────────────────────────
         options = ctk.CTkFrame(self, fg_color="transparent")
         options.pack(fill="x", padx=14, pady=(0, 6))
-        ctk.CTkLabel(options, text="Layout das fotos:").pack(side="left")
-        self.foto_cols_var = tk.StringVar(value=str(self.config_data.get("foto_cols", "2")))
-        ctk.CTkOptionMenu(
-            options,
-            variable=self.foto_cols_var,
-            values=["1", "2"],
-            width=80,
-            command=lambda _v: self._on_photo_layout_change(),
-        ).pack(side="left", padx=6)
-        ctk.CTkLabel(options, text="colunas | altura máx (cm):").pack(side="left", padx=(8, 4))
-        self.foto_h_var = tk.StringVar(value=str(self.config_data.get("foto_max_height_cm", "8.1")))
-        ctk.CTkOptionMenu(
-            options,
-            variable=self.foto_h_var,
-            values=["6.0", "7.0", "8.1", "9.5", "11.0"],
-            width=90,
-            command=lambda _v: self._on_photo_layout_change(),
-        ).pack(side="left")
-        ctk.CTkLabel(options, text="Marca d'água:").pack(side="left", padx=(10, 4))
-        ctk.CTkButton(options, text="Selecionar", width=92, command=self.select_watermark).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(options, text="Limpar", width=68, command=self.clear_watermark).pack(side="left", padx=(0, 6))
-        ctk.CTkLabel(options, text="opacidade:").pack(side="left", padx=(4, 4))
-        self.watermark_opacity_var = tk.StringVar(value=str(self.config_data.get("watermark_opacity", "0.12")))
-        ctk.CTkOptionMenu(
-            options,
-            variable=self.watermark_opacity_var,
-            values=["0.05", "0.08", "0.12", "0.16", "0.20", "0.25", "0.30", "0.35", "0.40"],
-            width=86,
-            command=lambda _v: self._on_watermark_change(),
-        ).pack(side="left")
-        ctk.CTkLabel(options, text="tamanho:").pack(side="left", padx=(8, 4))
-        self.watermark_scale_var = tk.StringVar(value=str(self.config_data.get("watermark_scale", "0.75")))
-        ctk.CTkOptionMenu(
-            options,
-            variable=self.watermark_scale_var,
-            values=["0.40", "0.55", "0.75", "0.90", "1.05", "1.25", "1.45"],
-            width=84,
-            command=lambda _v: self._on_watermark_change(),
-        ).pack(side="left")
 
+        ctk.CTkLabel(options, text="Fotos:").pack(side="left")
+        self.foto_cols_var = tk.StringVar(value=str(self.config_data.get("foto_cols", "2")))
+        ctk.CTkOptionMenu(options, variable=self.foto_cols_var, values=["1", "2"], width=65,
+                          command=lambda _v: self._on_photo_layout_change()).pack(side="left", padx=(4, 0))
+        ctk.CTkLabel(options, text="col | alt máx:").pack(side="left", padx=(4, 4))
+        self.foto_h_var = tk.StringVar(value=str(self.config_data.get("foto_max_height_cm", "8.1")))
+        ctk.CTkOptionMenu(options, variable=self.foto_h_var,
+                          values=["6.0", "7.0", "8.1", "9.5", "11.0"], width=76,
+                          command=lambda _v: self._on_photo_layout_change()).pack(side="left")
+
+        ctk.CTkLabel(options, text="  Marca d'água:").pack(side="left", padx=(6, 4))
+        ctk.CTkButton(options, text="Selecionar", width=88, command=self.select_watermark).pack(side="left", padx=(0, 3))
+        ctk.CTkButton(options, text="Limpar", width=60, command=self.clear_watermark).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(options, text="op:").pack(side="left", padx=(2, 2))
+        self.watermark_opacity_var = tk.StringVar(value=str(self.config_data.get("watermark_opacity", "0.12")))
+        ctk.CTkOptionMenu(options, variable=self.watermark_opacity_var,
+                          values=["0.05", "0.08", "0.12", "0.16", "0.20", "0.25", "0.30", "0.35", "0.40"],
+                          width=80, command=lambda _v: self._on_watermark_change()).pack(side="left")
+        ctk.CTkLabel(options, text="tam:").pack(side="left", padx=(6, 2))
+        self.watermark_scale_var = tk.StringVar(value=str(self.config_data.get("watermark_scale", "0.75")))
+        ctk.CTkOptionMenu(options, variable=self.watermark_scale_var,
+                          values=["0.40", "0.55", "0.75", "0.90", "1.05", "1.25", "1.45"],
+                          width=76, command=lambda _v: self._on_watermark_change()).pack(side="left")
+
+        ctk.CTkLabel(options, text="  Capa:").pack(side="left", padx=(6, 2))
+        self.cover_header_scale_var = tk.StringVar(value=str(self.config_data.get("cover_header_scale", "1.8")))
+        ctk.CTkOptionMenu(options, variable=self.cover_header_scale_var,
+                          values=["1.0", "1.2", "1.5", "1.8", "2.1", "2.4", "2.8"],
+                          width=76, command=lambda _v: self._on_cover_scale_change()).pack(side="left")
+
+        # ← NOVA: checkbox folha de assinatura
+        self.signature_var = tk.BooleanVar(value=bool(self.config_data.get("signature_page", False)))
+        ctk.CTkCheckBox(
+            options,
+            text="Folha de assinatura",
+            variable=self.signature_var,
+            command=self._on_signature_toggle,
+        ).pack(side="left", padx=(12, 4))
+
+        # ── Recentes ──────────────────────────────────────────────────
+        self._build_recents_bar()
+
+        # ── Área principal ─────────────────────────────────────────────
         self._main = ctk.CTkFrame(self, fg_color="transparent")
         self._main.pack(fill="both", expand=True, padx=14, pady=(0, 6))
 
@@ -1310,35 +1522,25 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         for key in panel_keys:
             frame = ctk.CTkFrame(self.sections_tabs)
             if key != "cabecalho":
-                controls = ctk.CTkFrame(frame, fg_color="transparent")
-                controls.pack(fill="x", padx=6, pady=(6, 0))
+                controls_frame = ctk.CTkFrame(frame, fg_color="transparent")
+                controls_frame.pack(fill="x", padx=6, pady=(6, 0))
                 if key == "horarios":
-                    ctk.CTkLabel(
-                        controls,
-                        text="Preencha a tabela abaixo (mesmo layout do PDF).",
-                        text_color="#8EA1B2",
-                    ).pack(side="left", padx=(0, 4))
+                    ctk.CTkLabel(controls_frame, text="Preencha a tabela abaixo.", text_color="#8EA1B2").pack(side="left")
                 else:
-                    ctk.CTkLabel(controls, text="Deslocamento antes do tópico (cm):").pack(side="left", padx=(0, 4))
+                    ctk.CTkLabel(controls_frame, text="Deslocamento antes do tópico (cm):").pack(side="left", padx=(0, 4))
                     offset_var = tk.StringVar(value=str(saved_offsets.get(key, "0.0")))
-                    offset = ctk.CTkOptionMenu(
-                        controls,
-                        variable=offset_var,
+                    ctk.CTkOptionMenu(
+                        controls_frame, variable=offset_var,
                         values=["0.0", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
                         width=90,
                         command=lambda _v, k=key: self._on_offset_change(k),
-                    )
-                    offset.pack(side="left")
+                    ).pack(side="left")
                     self.section_offset_vars[key] = offset_var
             if key == "horarios":
                 box = HorariosTableEditor(frame, on_change=self._on_horarios_table_change)
                 box.pack(fill="both", expand=True, padx=6, pady=6)
             elif key == "cabecalho":
-                ctk.CTkLabel(
-                    frame,
-                    text="Padrão da capa carregado. Você pode editar, excluir ou adicionar tópicos.",
-                    text_color="#8EA1B2",
-                ).pack(anchor="w", padx=8, pady=(6, 0))
+                ctk.CTkLabel(frame, text="Edite, exclua ou adicione tópicos do cabeçalho.", text_color="#8EA1B2").pack(anchor="w", padx=8, pady=(6, 0))
                 box = HeaderTableEditor(frame, on_change=self._on_header_table_change)
                 box.pack(fill="both", expand=True, padx=6, pady=6)
             else:
@@ -1347,16 +1549,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 box.bind("<<Modified>>", self._on_section_text_edit)
             self.sections_tabs.add(frame, text=nomes[key])
             self.section_widgets[key] = box
-        ctk.CTkLabel(options, text="Escala da capa (cabeçalho):").pack(side="left", padx=(10, 4))
-        self.cover_header_scale_var = tk.StringVar(value=str(self.config_data.get("cover_header_scale", "1.8")))
-        ctk.CTkOptionMenu(
-            options,
-            variable=self.cover_header_scale_var,
-            values=["1.0", "1.2", "1.5", "1.8", "2.1", "2.4", "2.8"],
-            width=86,
-            command=lambda _v: self._on_cover_scale_change(),
-        ).pack(side="left")
 
+        # Painel de prévia
         right = ctk.CTkFrame(self._main, fg_color="transparent")
         right.pack(side="right", fill="both", padx=(10, 0))
 
@@ -1371,7 +1565,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self._build_drop_support()
 
         self.update_label()
-        self._update_template_preview_image()
         if not self._preview_visible:
             self._toggle_preview(initial=True)
 
@@ -1379,6 +1572,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.bind("<Configure>", self._on_resize)
         self._update_tecnico_label()
 
+        # Atalhos de teclado
         self.bind("<Control-g>", lambda e: self.generate())
         self.bind("<Control-G>", lambda e: self.generate())
         self.bind("<Control-l>", lambda e: self._limpar())
@@ -1387,7 +1581,29 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.bind("<Control-T>", lambda e: self.select_template())
         self.bind("<Control-s>", lambda e: self._save_text_to_file())
         self.bind("<Control-S>", lambda e: self._save_text_to_file())
+        self.bind("<Control-o>", lambda e: self._abrir_ultimo_pdf())
+        self.bind("<Control-O>", lambda e: self._abrir_ultimo_pdf())
 
+    # ── Recentes ──────────────────────────────────────────────────────
+    def _build_recents_bar(self):
+        recents = [p for p in self.config_data.get("recent_pdfs", []) if os.path.exists(p)]
+        if not recents:
+            return
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.pack(fill="x", padx=14, pady=(0, 4))
+        ctk.CTkLabel(bar, text="Recentes:", text_color="#7D93A8", font=ctk.CTkFont(size=11)).pack(side="left", padx=(0, 6))
+        for path in recents[:5]:
+            nome = os.path.basename(path)
+            btn = ctk.CTkButton(
+                bar, text=nome[:28] + ("…" if len(nome) > 28 else ""),
+                width=10, height=24, font=ctk.CTkFont(size=10),
+                fg_color="transparent", border_width=1,
+                text_color=("#1A4A7A", "#7EB3E8"),
+                command=lambda p=path: abrir_pdf(p),
+            )
+            btn.pack(side="left", padx=3)
+
+    # ── Helpers ───────────────────────────────────────────────────────
     def _set_status(self, msg):
         self.status_label.configure(text=msg)
 
@@ -1414,17 +1630,16 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
     def _update_tecnico_label(self):
         tecnico = str(self.config_data.get("default_tecnico", "")).strip() or "(não definido)"
-        self._tecnico_label.configure(text=f"Técnico atual: {tecnico}")
+        self._tecnico_label.configure(text=f"Técnico: {tecnico}")
 
     def _build_drop_support(self):
         if not (TkinterDnD and DND_FILES):
-            self._set_status("Arrastar e soltar desativado (tkinterdnd2 não instalado).")
             return
         try:
             self.text.drop_target_register(DND_FILES)
             self.text.dnd_bind("<<Drop>>", self._on_drop_text_file)
         except Exception:
-            self._set_status("Não foi possível ativar arrastar e soltar.")
+            pass
 
     def _on_drop_text_file(self, event):
         raw = event.data.strip()
@@ -1441,7 +1656,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 data = f.read()
             self.text.delete("1.0", "end")
             self.text.insert("1.0", data)
-            self._set_status(f"Arquivo carregado via arrastar/soltar: {os.path.basename(path)}")
+            self._set_status(f"Arquivo carregado: {os.path.basename(path)}")
         except Exception as e:
             messagebox.showerror("Erro", f"Falha ao carregar arquivo: {e}")
 
@@ -1466,6 +1681,13 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _on_header_table_change(self):
         if self._suspend_section_events:
             return
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
+    def _on_signature_toggle(self):
+        self.config_data["signature_page"] = bool(self.signature_var.get())
+        estado = "ativada" if self.signature_var.get() else "desativada"
+        self._set_status(f"Folha de assinatura {estado}.")
         if self.chk_auto_var.get():
             self.force_preview_update()
 
@@ -1512,10 +1734,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         try:
             for key, box in self.section_widgets.items():
                 if key == "cabecalho":
-                    rows = _compose_header_rows(
-                        sections.get("info", {}),
-                        sections.get("info_extra", []),
-                    )
+                    rows = _compose_header_rows(sections.get("info", {}), sections.get("info_extra", []))
                     box.set_rows(rows)
                 elif key == "horarios":
                     box.set_rows([])
@@ -1547,8 +1766,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
     def _on_auto_preview_toggle(self):
         self.config_data["preview_auto"] = bool(self.chk_auto_var.get())
-        estado = "ativada" if self.chk_auto_var.get() else "desativada"
-        self._set_status(f"Prévia automática {estado}.")
 
     def _on_photo_layout_change(self):
         self.config_data["foto_cols"] = str(self.foto_cols_var.get())
@@ -1594,9 +1811,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             return
         self._preview_panel.show_generating()
         self._set_status("Gerando pré-visualização...")
-        preview_text = limpar_texto(texto)
         self._engine.schedule_update(
-            preview_text,
+            limpar_texto(texto),
             sections=sections,
             fotos=self.fotos,
             foto_cols=int(self.foto_cols_var.get()),
@@ -1608,13 +1824,14 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             watermark_opacity=float(self.watermark_opacity_var.get()),
             watermark_scale=float(self.watermark_scale_var.get()),
             cover_header_scale=float(self.cover_header_scale_var.get()),
+            include_signature_page=bool(self.signature_var.get()),
         )
 
     def _on_preview_ready(self, images, error):
         def _update():
             if error:
                 self._set_status("Falha ao gerar prévia.")
-                self._preview_panel.show_status(f"⚠ {error[:80]}")
+                self._preview_panel.show_status(f"⚠ {error[:120]}")
             elif images:
                 self._set_status("Prévia atualizada.")
                 self._preview_panel.update_pages(images)
@@ -1629,7 +1846,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             self._preview_panel.pack(fill="both", expand=True)
             self._toggle_btn.configure(text="◀ Ocultar prévia")
             self._preview_visible = True
-
         if not initial:
             self.config_data["preview_visible"] = self._preview_visible
 
@@ -1649,13 +1865,14 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data["watermark_opacity"] = str(self.watermark_opacity_var.get())
         self.config_data["watermark_scale"] = str(self.watermark_scale_var.get())
         self.config_data["cover_header_scale"] = str(self.cover_header_scale_var.get())
+        self.config_data["signature_page"] = bool(self.signature_var.get())
         save_config(self.config_data)
         self._engine.stop()
         self.destroy()
 
     def update_label(self):
         path = self.config_data.get("template_path", "")
-        self.label.configure(text=f"Template: {path}" if path else "Template: não selecionado")
+        self.label.configure(text=f"Template: {os.path.basename(path)}" if path else "Template: não selecionado")
 
     def _pick_initial_dir(self):
         return self.config_data.get("last_dir") or os.path.expanduser("~")
@@ -1665,17 +1882,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             self.config_data["last_dir"] = os.path.dirname(filepath)
             save_config(self.config_data)
 
-    def _update_template_preview_image(self):
-        # Prévia dedicada do template removida: agora mostramos apenas a pré-visualização final do PDF.
-        return
-
     def select_template(self):
         file = filedialog.askopenfilename(initialdir=self._pick_initial_dir(), filetypes=[("PDF", "*.pdf")])
         if file:
             self.config_data["template_path"] = file
             self._remember_dir(file)
             self.update_label()
-            self._update_template_preview_image()
             self._set_status("Template atualizado.")
             if self.chk_auto_var.get():
                 self.force_preview_update()
@@ -1698,6 +1910,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             f.write(content)
         self._remember_dir(path)
         self._set_status(f"Texto salvo em {os.path.basename(path)}.")
+
+    def _abrir_ultimo_pdf(self):
+        if self._last_generated_pdf and os.path.exists(self._last_generated_pdf):
+            abrir_pdf(self._last_generated_pdf)
+        else:
+            self._set_status("Nenhum PDF gerado nesta sessão.")
 
     def _add_fotos(self):
         arquivos = filedialog.askopenfilenames(
@@ -1763,40 +1981,25 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             entry.insert(0, foto.get("title", ""))
             entry.pack(side="left", fill="x", expand=True, padx=4)
             entry.bind("<KeyRelease>", lambda e, i=idx, ent=entry: self._set_foto_title(i, ent.get()))
-            comentario_entry = ctk.CTkEntry(row, placeholder_text="Comentário da foto")
+
+            comentario_entry = ctk.CTkEntry(row, placeholder_text="Comentário")
             comentario_entry.insert(0, foto.get("comment", ""))
             comentario_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
             comentario_entry.bind("<KeyRelease>", lambda e, i=idx, ent=comentario_entry: self._set_foto_comment(i, ent.get()))
 
             layout_var = tk.StringVar(value=foto.get("layout", PHOTO_LAYOUT_MODES[0]))
-            layout_menu = ctk.CTkOptionMenu(
-                row,
-                variable=layout_var,
-                values=PHOTO_LAYOUT_MODES,
-                width=140,
-                command=lambda v, i=idx: self._set_foto_layout(i, v),
-            )
-            layout_menu.pack(side="left", padx=3)
+            ctk.CTkOptionMenu(row, variable=layout_var, values=PHOTO_LAYOUT_MODES, width=140,
+                              command=lambda v, i=idx: self._set_foto_layout(i, v)).pack(side="left", padx=3)
 
             height_var = tk.StringVar(value=f"{float(foto.get('max_height_cm', self.foto_h_var.get())):.1f}")
-            height_menu = ctk.CTkOptionMenu(
-                row,
-                variable=height_var,
-                values=["5.0", "6.0", "7.0", "8.1", "9.5", "11.0", "13.0", "16.0", "20.0"],
-                width=85,
-                command=lambda v, i=idx: self._set_foto_height(i, v),
-            )
-            height_menu.pack(side="left", padx=3)
+            ctk.CTkOptionMenu(row, variable=height_var,
+                              values=["5.0", "6.0", "7.0", "8.1", "9.5", "11.0", "13.0", "16.0", "20.0"],
+                              width=85, command=lambda v, i=idx: self._set_foto_height(i, v)).pack(side="left", padx=3)
 
             width_var = tk.StringVar(value=f"{int(float(foto.get('width_percent', 100)))}%")
-            width_menu = ctk.CTkOptionMenu(
-                row,
-                variable=width_var,
-                values=["70%", "80%", "90%", "100%", "110%", "120%", "130%", "150%", "170%", "200%"],
-                width=78,
-                command=lambda v, i=idx: self._set_foto_width(i, v),
-            )
-            width_menu.pack(side="left", padx=3)
+            ctk.CTkOptionMenu(row, variable=width_var,
+                              values=["70%", "80%", "90%", "100%", "110%", "120%", "130%", "150%", "170%", "200%"],
+                              width=78, command=lambda v, i=idx: self._set_foto_width(i, v)).pack(side="left", padx=3)
 
             ctk.CTkButton(row, text="↑", width=28, command=lambda i=idx: self._move_foto(i, -1)).pack(side="left", padx=1)
             ctk.CTkButton(row, text="↓", width=28, command=lambda i=idx: self._move_foto(i, 1)).pack(side="left", padx=1)
@@ -1838,11 +2041,22 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             if self.chk_auto_var.get():
                 self.force_preview_update()
 
+    # ── GERAR PDF (em thread separada com validação) ───────────────────
     def generate(self):
         texto = self.text.get("1.0", "end").strip()
         if not texto:
-            messagebox.showerror("Erro", "Cole o texto primeiro")
+            messagebox.showerror("Erro", "Cole o texto primeiro.")
             return
+
+        sections = self._get_sections_from_ui()
+
+        # ← Validação antes de gerar
+        avisos = validar_sections(sections, self.fotos)
+        if avisos:
+            msg = "Atenção antes de gerar:\n\n" + "\n".join(f"• {a}" for a in avisos)
+            msg += "\n\nDeseja continuar mesmo assim?"
+            if not messagebox.askyesno("Validação", msg):
+                return
 
         save = filedialog.asksaveasfilename(
             initialdir=self._pick_initial_dir(),
@@ -1853,30 +2067,45 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             return
         self._remember_dir(save)
 
-        sections = self._get_sections_from_ui()
+        # ← Geração em thread separada para não travar a UI
         self._set_status("Gerando PDF...")
-        self.update_idletasks()
-        try:
-            self._set_status("Processando imagens...")
-            gerar_pdf(
-                sections,
-                self.config_data.get("template_path", ""),
-                save,
-                fotos=self.fotos,
-                foto_cols=int(self.foto_cols_var.get()),
-                foto_max_height_cm=float(self.foto_h_var.get()),
-                section_offsets_cm=self._get_section_offsets_cm(),
-                horarios=self._get_horarios_from_ui(),
-                watermark_path=self.config_data.get("watermark_path", ""),
-                watermark_opacity=float(self.watermark_opacity_var.get()),
-                watermark_scale=float(self.watermark_scale_var.get()),
-                cover_header_scale=float(self.cover_header_scale_var.get()),
-            )
-            self._set_status("PDF gerado com sucesso.")
-            messagebox.showinfo("Sucesso", "PDF gerado!")
-        except Exception as e:
-            self._set_status("Erro ao gerar PDF.")
-            messagebox.showerror("Erro", str(e))
+        self._btn_abrir_pdf.pack_forget()
+
+        def _worker():
+            try:
+                gerar_pdf(
+                    sections,
+                    self.config_data.get("template_path", ""),
+                    save,
+                    fotos=self.fotos,
+                    foto_cols=int(self.foto_cols_var.get()),
+                    foto_max_height_cm=float(self.foto_h_var.get()),
+                    section_offsets_cm=self._get_section_offsets_cm(),
+                    horarios=self._get_horarios_from_ui(),
+                    watermark_path=self.config_data.get("watermark_path", ""),
+                    watermark_opacity=float(self.watermark_opacity_var.get()),
+                    watermark_scale=float(self.watermark_scale_var.get()),
+                    cover_header_scale=float(self.cover_header_scale_var.get()),
+                    include_signature_page=bool(self.signature_var.get()),
+                )
+                self.after(0, lambda: self._on_generate_success(save))
+            except Exception as e:
+                self.after(0, lambda err=str(e): self._on_generate_error(err))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_generate_success(self, path):
+        self._last_generated_pdf = path
+        add_recent_pdf(self.config_data, path)
+        self._set_status(f"PDF gerado: {os.path.basename(path)}")
+        # Mostra botão "Abrir PDF" na barra superior
+        self._btn_abrir_pdf.pack(side="left", padx=6)
+        if messagebox.askyesno("Sucesso", f"PDF gerado com sucesso!\n{os.path.basename(path)}\n\nAbrir agora?"):
+            abrir_pdf(path)
+
+    def _on_generate_error(self, err):
+        self._set_status("Erro ao gerar PDF.")
+        messagebox.showerror("Erro ao gerar PDF", err)
 
 
 if __name__ == "__main__":
