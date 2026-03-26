@@ -38,6 +38,8 @@ SECTION_HEADERS = {
 
 PHOTO_LAYOUT_MODES = ["Dividir página", "Página inteira"]
 WATERMARK_MODES = ["Central", "Timbrado aleatório"]
+WATERMARK_RANDOM_COUNT_OPTIONS = ["4", "6", "8", "10", "12", "14", "16", "20"]
+HORARIOS_DESCRICAO_PRESETS = ["", "Hora técnica", "Deslocamento"]
 
 INFO_ALIASES = {
     "equipamento": "equipamento",
@@ -127,6 +129,8 @@ def load_config():
     defaults = {
         "template_path": "",
         "last_dir": "",
+        "pdf_save_dir": "",
+        "image_dir": "",
         "preview_visible": True,
         "preview_auto": True,
         "zoom_factor": 1.0,
@@ -139,6 +143,7 @@ def load_config():
         "watermark_opacity": "0.12",
         "watermark_scale": "0.75",
         "watermark_mode": "Central",
+        "watermark_random_count": "8",
         "cover_header_scale": "1.8",
         "signature_page": True,
         "recent_pdfs": [],
@@ -505,7 +510,9 @@ def _parse_horarios_table(raw_text):
             continue
         if len(parts) == 3:
             parts.append("")
-        date, inicio, fim, intervalos = parts[:4]
+        if len(parts) == 4:
+            parts.append("")
+        date, inicio, fim, intervalos, descricao = parts[:5]
         # ← MELHORIA: só inclui linha se tiver pelo menos data ou horário válido
         if not date and not inicio and not fim:
             continue
@@ -514,16 +521,17 @@ def _parse_horarios_table(raw_text):
             _normalize_time(inicio),
             _normalize_time(fim),
             intervalos,
+            descricao,
         ])
     return linhas
 
 
 def _compose_horarios_table_text(rows=None):
     rows = rows or []
-    lines = ["Data | Início | Fim | Intervalos"]
+    lines = ["Data | Início | Fim | Intervalos | Descrição"]
     for row in rows:
-        date, inicio, fim, intervalos = (list(row) + ["", "", "", ""])[:4]
-        lines.append(f"{date} | {inicio} | {fim} | {intervalos}")
+        date, inicio, fim, intervalos, descricao = (list(row) + ["", "", "", "", ""])[:5]
+        lines.append(f"{date} | {inicio} | {fim} | {intervalos} | {descricao}")
     return "\n".join(lines)
 
 
@@ -629,6 +637,7 @@ def gerar_pdf(
     watermark_opacity=0.12,
     watermark_scale=0.75,
     watermark_mode="Central",
+    watermark_random_count=8,
     cover_header_scale=1.8,
     include_signature_page=False,
 ):
@@ -741,8 +750,8 @@ def gerar_pdf(
     if horarios:
         story.append(Paragraph("<b>TABELA DE HORÁRIOS DO ATENDIMENTO</b>", styles["Secao"]))
         story.append(Spacer(1, 8))
-        dados_horarios = [["Data", "Início", "Fim", "Intervalos"], *horarios]
-        tabela_horarios = Table(dados_horarios, colWidths=[4 * cm, 3.2 * cm, 3.2 * cm, 5.6 * cm])
+        dados_horarios = [["Data", "Início", "Fim", "Intervalos", "Descrição"], *horarios]
+        tabela_horarios = Table(dados_horarios, colWidths=[3.2 * cm, 2.4 * cm, 2.4 * cm, 4.2 * cm, 3.8 * cm])
         tabela_horarios.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DCE8F2")),
             ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F8FBFD")),
@@ -850,7 +859,7 @@ def gerar_pdf(
                     import random
 
                     rng = random.Random(page_number * 1777)
-                    logos = max(5, min(14, int(8 * scale)))
+                    logos = max(1, min(60, int(watermark_random_count)))
                     min_factor = max(0.07, 0.11 * scale)
                     max_factor = max(min_factor + 0.02, min(0.28, 0.19 * scale + 0.08))
                     for _ in range(logos):
@@ -1003,6 +1012,7 @@ class PreviewEngine:
         self._current_watermark_opacity = 0.12
         self._current_watermark_scale = 0.75
         self._current_watermark_mode = "Central"
+        self._current_watermark_random_count = 8
         self._current_cover_header_scale = 1.8
         self._current_signature_page = False
         self._temp_dir = tempfile.mkdtemp()
@@ -1022,6 +1032,7 @@ class PreviewEngine:
         watermark_opacity=0.12,
         watermark_scale=0.75,
         watermark_mode="Central",
+        watermark_random_count=8,
         cover_header_scale=1.8,
         include_signature_page=False,
     ):
@@ -1038,6 +1049,7 @@ class PreviewEngine:
             self._current_watermark_opacity = watermark_opacity
             self._current_watermark_scale = watermark_scale
             self._current_watermark_mode = watermark_mode or "Central"
+            self._current_watermark_random_count = max(1, min(60, int(watermark_random_count)))
             self._current_cover_header_scale = cover_header_scale
             self._current_signature_page = include_signature_page
             if self._timer is not None:
@@ -1062,6 +1074,7 @@ class PreviewEngine:
             watermark_opacity = self._current_watermark_opacity
             watermark_scale = self._current_watermark_scale
             watermark_mode = self._current_watermark_mode
+            watermark_random_count = self._current_watermark_random_count
             cover_header_scale = self._current_cover_header_scale
             include_signature_page = self._current_signature_page
 
@@ -1084,6 +1097,7 @@ class PreviewEngine:
                 watermark_opacity=watermark_opacity,
                 watermark_scale=watermark_scale,
                 watermark_mode=watermark_mode,
+                watermark_random_count=watermark_random_count,
                 cover_header_scale=cover_header_scale,
                 include_signature_page=include_signature_page,
             )
@@ -1273,7 +1287,7 @@ class PreviewPanel(ctk.CTkFrame):
 
 
 class HorariosTableEditor(ctk.CTkFrame):
-    COLUMNS = ("data", "inicio", "fim", "intervalos")
+    COLUMNS = ("data", "inicio", "fim", "intervalos", "descricao")
 
     def __init__(self, master, on_change=None, **kwargs):
         super().__init__(master, **kwargs)
@@ -1291,8 +1305,8 @@ class HorariosTableEditor(ctk.CTkFrame):
         ctk.CTkButton(controls, text="Remover", width=90, command=self._remove_selected).pack(side="left")
 
         self.tree = ttk.Treeview(self, columns=self.COLUMNS, show="headings", height=4)
-        headings = ("Data", "Início", "Fim", "Intervalos")
-        widths = (100, 70, 70, 220)
+        headings = ("Data", "Início", "Fim", "Intervalos", "Descrição")
+        widths = (100, 70, 70, 180, 150)
         for col, heading, width in zip(self.COLUMNS, headings, widths):
             self.tree.heading(col, text=heading)
             self.tree.column(col, width=width, anchor="center" if col != "intervalos" else "w", stretch=True)
@@ -1305,7 +1319,7 @@ class HorariosTableEditor(ctk.CTkFrame):
         self.tree.bind("<F2>", self._begin_inline_edit_from_focus)
 
     def _add_empty_row(self):
-        row_id = self.tree.insert("", "end", values=["", "", "", ""])
+        row_id = self.tree.insert("", "end", values=["", "", "", "", ""])
         self.tree.selection_set(row_id)
         self.tree.focus(row_id)
         if self._on_change:
@@ -1356,6 +1370,36 @@ class HorariosTableEditor(ctk.CTkFrame):
         if self._inline_editor:
             self._inline_editor.destroy()
             self._inline_editor = None
+        if self.COLUMNS[col_index] == "descricao":
+            editor_var = tk.StringVar(value=values[col_index])
+            editor = ctk.CTkComboBox(
+                self.tree,
+                values=HORARIOS_DESCRICAO_PRESETS,
+                variable=editor_var,
+                width=max(110, w),
+                height=h,
+            )
+            editor.place(x=x, y=y)
+            editor.focus_set()
+
+            def _save(_event=None):
+                values[col_index] = editor_var.get().strip()
+                self.tree.item(row_id, values=values)
+                editor.destroy()
+                self._inline_editor = None
+                if self._on_change:
+                    self._on_change()
+
+            def _cancel(_event=None):
+                editor.destroy()
+                self._inline_editor = None
+
+            editor.bind("<Return>", _save)
+            editor.bind("<FocusOut>", _save)
+            editor.bind("<Escape>", _cancel)
+            self._inline_editor = editor
+            return
+
         editor = ctk.CTkEntry(self.tree, width=w, height=h)
         editor.insert(0, values[col_index])
         editor.place(x=x, y=y)
@@ -1385,7 +1429,7 @@ class HorariosTableEditor(ctk.CTkFrame):
     def set_rows(self, rows):
         self.clear()
         for row in rows or []:
-            self.tree.insert("", "end", values=(list(row) + ["", "", "", ""])[:4])
+            self.tree.insert("", "end", values=(list(row) + ["", "", "", "", ""])[:5])
 
     def clear(self):
         for item in self.tree.get_children(""):
@@ -1529,9 +1573,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data.setdefault("preview_auto", True)
         self.config_data.setdefault("zoom_factor", 1.0)
         self.config_data.setdefault("last_dir", "")
+        self.config_data.setdefault("pdf_save_dir", "")
+        self.config_data.setdefault("image_dir", "")
         self.config_data.setdefault("default_tecnico", "")
         self.config_data.setdefault("signature_page", True)
         self.config_data.setdefault("watermark_mode", "Central")
+        self.config_data.setdefault("watermark_random_count", "8")
         self.config_data.setdefault("recent_pdfs", [])
 
         self.fotos = []
@@ -1602,6 +1649,15 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         ctk.CTkOptionMenu(options, variable=self.watermark_mode_var,
                           values=WATERMARK_MODES,
                           width=170, command=lambda _v: self._on_watermark_change()).pack(side="left")
+        ctk.CTkLabel(options, text="qtd:").pack(side="left", padx=(6, 2))
+        self.watermark_random_count_var = tk.StringVar(value=str(self.config_data.get("watermark_random_count", "8")))
+        ctk.CTkOptionMenu(
+            options,
+            variable=self.watermark_random_count_var,
+            values=WATERMARK_RANDOM_COUNT_OPTIONS,
+            width=70,
+            command=lambda _v: self._on_watermark_change(),
+        ).pack(side="left")
 
         ctk.CTkLabel(options, text="  Capa:").pack(side="left", padx=(6, 2))
         self.cover_header_scale_var = tk.StringVar(value=str(self.config_data.get("cover_header_scale", "1.8")))
@@ -1913,6 +1969,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data["watermark_opacity"] = str(self.watermark_opacity_var.get())
         self.config_data["watermark_scale"] = str(self.watermark_scale_var.get())
         self.config_data["watermark_mode"] = str(self.watermark_mode_var.get())
+        self.config_data["watermark_random_count"] = str(self.watermark_random_count_var.get())
         if self.chk_auto_var.get():
             self.force_preview_update()
 
@@ -1921,15 +1978,21 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         if self.chk_auto_var.get():
             self.force_preview_update()
 
+    def _get_watermark_random_count(self):
+        try:
+            return max(1, min(60, int(self.watermark_random_count_var.get())))
+        except Exception:
+            return 8
+
     def select_watermark(self):
         file = filedialog.askopenfilename(
-            initialdir=self._pick_initial_dir(),
+            initialdir=self._pick_image_dir(),
             filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp")],
         )
         if not file:
             return
         self.config_data["watermark_path"] = file
-        self._remember_dir(file)
+        self._remember_image_dir(file)
         self._set_status("Marca d'água atualizada.")
         if self.chk_auto_var.get():
             self.force_preview_update()
@@ -1961,6 +2024,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             watermark_opacity=float(self.watermark_opacity_var.get()),
             watermark_scale=float(self.watermark_scale_var.get()),
             watermark_mode=str(self.watermark_mode_var.get()),
+            watermark_random_count=self._get_watermark_random_count(),
             cover_header_scale=float(self.cover_header_scale_var.get()),
             include_signature_page=bool(self.signature_var.get()),
         )
@@ -2003,6 +2067,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data["watermark_opacity"] = str(self.watermark_opacity_var.get())
         self.config_data["watermark_scale"] = str(self.watermark_scale_var.get())
         self.config_data["watermark_mode"] = str(self.watermark_mode_var.get())
+        self.config_data["watermark_random_count"] = str(self.watermark_random_count_var.get())
         self.config_data["cover_header_scale"] = str(self.cover_header_scale_var.get())
         self.config_data["signature_page"] = bool(self.signature_var.get())
         save_config(self.config_data)
@@ -2016,10 +2081,26 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _pick_initial_dir(self):
         return self.config_data.get("last_dir") or os.path.expanduser("~")
 
+    def _pick_pdf_save_dir(self):
+        return self.config_data.get("pdf_save_dir") or self._pick_initial_dir()
+
+    def _pick_image_dir(self):
+        return self.config_data.get("image_dir") or self._pick_initial_dir()
+
     def _remember_dir(self, filepath):
         if filepath:
             self.config_data["last_dir"] = os.path.dirname(filepath)
             save_config(self.config_data)
+
+    def _remember_pdf_save_dir(self, filepath):
+        if filepath:
+            self.config_data["pdf_save_dir"] = os.path.dirname(filepath)
+            self._remember_dir(filepath)
+
+    def _remember_image_dir(self, filepath):
+        if filepath:
+            self.config_data["image_dir"] = os.path.dirname(filepath)
+            self._remember_dir(filepath)
 
     def select_template(self):
         file = filedialog.askopenfilename(initialdir=self._pick_initial_dir(), filetypes=[("PDF", "*.pdf")])
@@ -2058,13 +2139,13 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
     def _add_fotos(self):
         arquivos = filedialog.askopenfilenames(
-            initialdir=self._pick_initial_dir(),
+            initialdir=self._pick_image_dir(),
             title="Selecione as fotos",
             filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp")],
         )
         if not arquivos:
             return
-        self._remember_dir(arquivos[0])
+        self._remember_image_dir(arquivos[0])
         for arquivo in arquivos:
             self.fotos.append({
                 "path": arquivo,
@@ -2198,13 +2279,13 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                 return
 
         save = filedialog.asksaveasfilename(
-            initialdir=self._pick_initial_dir(),
+            initialdir=self._pick_pdf_save_dir(),
             defaultextension=".pdf",
             filetypes=[("PDF", "*.pdf")],
         )
         if not save:
             return
-        self._remember_dir(save)
+        self._remember_pdf_save_dir(save)
 
         # ← Geração em thread separada para não travar a UI
         self._set_status("Gerando PDF...")
@@ -2225,6 +2306,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                     watermark_opacity=float(self.watermark_opacity_var.get()),
                     watermark_scale=float(self.watermark_scale_var.get()),
                     watermark_mode=str(self.watermark_mode_var.get()),
+                    watermark_random_count=self._get_watermark_random_count(),
                     cover_header_scale=float(self.cover_header_scale_var.get()),
                     include_signature_page=bool(self.signature_var.get()),
                 )
