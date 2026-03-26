@@ -40,7 +40,6 @@ PHOTO_LAYOUT_MODES = ["Dividir página", "Página inteira"]
 WATERMARK_MODES = ["Central", "Timbrado aleatório", "Central + Timbrado aleatório"]
 WATERMARK_RANDOM_COUNT_OPTIONS = ["4", "6", "8", "10", "12", "14", "16", "20"]
 HORARIOS_DESCRICAO_PRESETS = ["", "Hora técnica", "Deslocamento"]
-DOCUMENT_TYPES = ["Relatório técnico", "Certificado de treinamento"]
 
 INFO_ALIASES = {
     "equipamento": "equipamento",
@@ -1617,18 +1616,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
         self.chk_auto_var = tk.BooleanVar(value=bool(self.config_data.get("preview_auto", True)))
         ctk.CTkCheckBox(top, text="Prévia automática", variable=self.chk_auto_var, command=self._on_auto_preview_toggle).pack(side="left", padx=10)
-        current_doc_type = str(self.config_data.get("document_type", DOCUMENT_TYPES[0]))
-        if current_doc_type not in DOCUMENT_TYPES:
-            current_doc_type = DOCUMENT_TYPES[0]
-        self.document_type_var = tk.StringVar(value=current_doc_type)
-        ctk.CTkLabel(top, text="Modelo:").pack(side="left", padx=(10, 4))
-        ctk.CTkOptionMenu(
-            top,
-            variable=self.document_type_var,
-            values=DOCUMENT_TYPES,
-            width=240,
-            command=self._on_document_type_change,
-        ).pack(side="left")
 
         # Botão "Abrir PDF" — aparece só depois de gerar
         self._btn_abrir_pdf = ctk.CTkButton(top, text="📂 Abrir PDF", width=110, command=self._abrir_ultimo_pdf,
@@ -1783,7 +1770,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.status_label = ctk.CTkLabel(self, text="Pronto", anchor="w")
         self.status_label.pack(fill="x", padx=14, pady=(0, 8))
         self._build_drop_support()
-        self._build_certificate_screen()
 
         self.update_label()
         if not self._preview_visible:
@@ -1792,7 +1778,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.bind("<Configure>", self._on_resize)
         self._update_tecnico_label()
-        self._on_document_type_change(self.document_type_var.get())
 
         # Atalhos de teclado
         self.bind("<Control-g>", lambda e: self.generate())
@@ -1825,94 +1810,9 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             )
             btn.pack(side="left", padx=3)
 
-    def _build_certificate_screen(self):
-        self.certificate_frame = ctk.CTkFrame(self, fg_color="transparent")
-
-        header = ctk.CTkFrame(self.certificate_frame, fg_color="transparent")
-        header.pack(fill="x", padx=14, pady=(6, 6))
-        ctk.CTkLabel(
-            header,
-            text="Modelo: Certificado de treinamento (exemplo de tela)",
-            font=ctk.CTkFont(size=16, weight="bold"),
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            header,
-            text="Preencha os campos-base. A geração deste modelo será implementada no próximo passo.",
-            text_color="#8EA1B2",
-        ).pack(anchor="w", pady=(2, 0))
-
-        form = ctk.CTkFrame(self.certificate_frame)
-        form.pack(fill="both", expand=True, padx=14, pady=(0, 8))
-
-        self.certificate_template_path_var = tk.StringVar(value=str(self.config_data.get("certificate_template_path", "")))
-        row1 = ctk.CTkFrame(form, fg_color="transparent")
-        row1.pack(fill="x", padx=10, pady=(10, 6))
-        ctk.CTkLabel(row1, text="Template padrão do certificado:", width=240, anchor="w").pack(side="left")
-        ctk.CTkEntry(row1, textvariable=self.certificate_template_path_var).pack(side="left", fill="x", expand=True, padx=(0, 6))
-        ctk.CTkButton(row1, text="Carregar template", width=150, command=self.select_certificate_template).pack(side="left")
-
-        row2 = ctk.CTkFrame(form, fg_color="transparent")
-        row2.pack(fill="x", padx=10, pady=6)
-        ctk.CTkLabel(row2, text="Nome do treinado:", width=240, anchor="w").pack(side="left")
-        self.certificate_trainee_var = tk.StringVar(value=str(self.config_data.get("certificate_trainee_name", "")))
-        ctk.CTkEntry(row2, textvariable=self.certificate_trainee_var).pack(side="left", fill="x", expand=True)
-
-        row3 = ctk.CTkFrame(form, fg_color="transparent")
-        row3.pack(fill="x", padx=10, pady=6)
-        ctk.CTkLabel(row3, text="Nome do instrutor:", width=240, anchor="w").pack(side="left")
-        self.certificate_instructor_var = tk.StringVar(value=str(self.config_data.get("certificate_instructor_name", "")))
-        ctk.CTkEntry(row3, textvariable=self.certificate_instructor_var).pack(side="left", fill="x", expand=True)
-
-        row4 = ctk.CTkFrame(form, fg_color="transparent")
-        row4.pack(fill="both", expand=True, padx=10, pady=(6, 10))
-        ctk.CTkLabel(row4, text="Texto padrão do certificado:", anchor="w").pack(anchor="w")
-        self.certificate_text = ctk.CTkTextbox(row4, wrap="word", height=120)
-        self.certificate_text.pack(fill="x", pady=(4, 8))
-        self.certificate_text.insert("1.0", str(self.config_data.get("certificate_default_text", "")))
-
-        ctk.CTkLabel(row4, text="Assuntos abordados (contra capa):", anchor="w").pack(anchor="w")
-        self.certificate_topics = ctk.CTkTextbox(row4, wrap="word")
-        self.certificate_topics.pack(fill="both", expand=True, pady=(4, 0))
-        self.certificate_topics.insert("1.0", str(self.config_data.get("certificate_topics", "")))
-
-    def _on_document_type_change(self, selected_type):
-        selected = selected_type or DOCUMENT_TYPES[0]
-        if hasattr(self, "certificate_frame"):
-            self._persist_certificate_fields()
-        self.config_data["document_type"] = selected
-        if selected == "Certificado de treinamento":
-            self.report_options_frame.pack_forget()
-            self.report_main_frame.pack_forget()
-            self.certificate_frame.pack(fill="both", expand=True, padx=0, pady=(0, 0))
-            self._set_status("Modo certificado selecionado.")
-            self._preview_panel.show_status("Prévia indisponível neste exemplo de certificado.")
-        else:
-            self.certificate_frame.pack_forget()
-            self.report_options_frame.pack(fill="x", padx=14, pady=(0, 6))
-            self.report_main_frame.pack(fill="both", expand=True, padx=14, pady=(0, 6))
-            self._set_status("Modo relatório técnico selecionado.")
-            if self.chk_auto_var.get():
-                self.force_preview_update()
-
-    def select_certificate_template(self):
-        file = filedialog.askopenfilename(initialdir=self._pick_initial_dir(), filetypes=[("PDF", "*.pdf")])
-        if not file:
-            return
-        self.certificate_template_path_var.set(file)
-        self.config_data["certificate_template_path"] = file
-        self._remember_dir(file)
-        self._set_status("Template do certificado carregado.")
-
     # ── Helpers ───────────────────────────────────────────────────────
     def _set_status(self, msg):
         self.status_label.configure(text=msg)
-
-    def _persist_certificate_fields(self):
-        self.config_data["certificate_template_path"] = self.certificate_template_path_var.get().strip()
-        self.config_data["certificate_trainee_name"] = self.certificate_trainee_var.get().strip()
-        self.config_data["certificate_instructor_name"] = self.certificate_instructor_var.get().strip()
-        self.config_data["certificate_default_text"] = self.certificate_text.get("1.0", "end").strip()
-        self.config_data["certificate_topics"] = self.certificate_topics.get("1.0", "end").strip()
 
     def _ensure_tecnico_login(self):
         tecnico_salvo = str(self.config_data.get("default_tecnico", "")).strip()
@@ -2119,9 +2019,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             self.force_preview_update()
 
     def force_preview_update(self):
-        if self.document_type_var.get() == "Certificado de treinamento":
-            self._preview_panel.show_status("Prévia indisponível neste exemplo de certificado.")
-            return
         texto = self.text.get("1.0", "end").strip()
         sections = self._get_sections_from_ui() if texto else {}
         if not texto and not self.fotos:
@@ -2175,7 +2072,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             self._preview_panel.set_width(w)
 
     def _on_close(self):
-        self._persist_certificate_fields()
         self.config_data["window_geometry"] = self.geometry()
         self.config_data["preview_visible"] = self._preview_visible
         self.config_data["zoom_factor"] = self._preview_panel.get_zoom_factor()
@@ -2189,7 +2085,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data["watermark_random_count"] = str(self.watermark_random_count_var.get())
         self.config_data["cover_header_scale"] = str(self.cover_header_scale_var.get())
         self.config_data["signature_page"] = bool(self.signature_var.get())
-        self.config_data["document_type"] = self.document_type_var.get()
         save_config(self.config_data)
         self._engine.stop()
         self.destroy()
@@ -2383,15 +2278,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
     # ── GERAR PDF (em thread separada com validação) ───────────────────
     def generate(self):
-        if self.document_type_var.get() == "Certificado de treinamento":
-            self._persist_certificate_fields()
-            save_config(self.config_data)
-            messagebox.showinfo(
-                "Modelo em preparação",
-                "A tela de Certificado de treinamento foi criada.\n"
-                "A geração de PDF deste modelo será implementada no próximo passo.",
-            )
-            return
         texto = self.text.get("1.0", "end").strip()
         if not texto:
             messagebox.showerror("Erro", "Cole o texto primeiro.")
