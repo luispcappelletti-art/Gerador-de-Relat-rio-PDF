@@ -1346,9 +1346,9 @@ class HorariosTableEditor(ctk.CTkFrame):
         if self._inline_editor:
             self._inline_editor.destroy()
             self._inline_editor = None
-        editor = ctk.CTkEntry(self.tree)
+        editor = ctk.CTkEntry(self.tree, width=w, height=h)
         editor.insert(0, values[col_index])
-        editor.place(x=x, y=y, width=w, height=h)
+        editor.place(x=x, y=y)
         editor.focus_set()
         editor.select_range(0, "end")
 
@@ -1439,9 +1439,9 @@ class HeaderTableEditor(ctk.CTkFrame):
         if self._inline_editor:
             self._inline_editor.destroy()
             self._inline_editor = None
-        editor = ctk.CTkEntry(self.tree)
+        editor = ctk.CTkEntry(self.tree, width=w, height=h)
         editor.insert(0, values[col_index])
-        editor.place(x=x, y=y, width=w, height=h)
+        editor.place(x=x, y=y)
         editor.focus_set()
         editor.select_range(0, "end")
 
