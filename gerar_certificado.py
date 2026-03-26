@@ -52,6 +52,7 @@ def load_config() -> dict:
     defaults = {
         "template_frente": "",
         "template_verso": "",
+        "lista_nomes_path": "",
         "texto_certificado": "",
         "topicos": "",
         "instrutor": "",
@@ -73,6 +74,12 @@ def load_config() -> dict:
 def save_config(cfg: dict):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def _sanitize_filename(value: str) -> str:
+    nome = re.sub(r'[\\/:*?"<>|]+', "_", (value or "").strip())
+    nome = re.sub(r"\s+", " ", nome).strip()
+    return nome or "Participante"
 
 
 # ─── PDF do Certificado ──────────────────────────────────────────────────────
@@ -257,27 +264,18 @@ def _build_verso_story(styles, aprendiz, topicos, instrutor, carga, data):
     return story
 
 
-def _draw_page_background(canvas_obj, template_path, page_idx):
-    """Aplica o template de fundo numa página do certificado."""
-    if not template_path or not os.path.exists(template_path):
-        return
-    try:
-        reader = PdfReader(template_path)
-        if page_idx < len(reader.pages):
-            # Renderiza como imagem via fitz para usar como fundo
-            doc = fitz.open(template_path)
-            mat = fitz.Matrix(2.5, 2.5)
-            page = doc[page_idx]
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            pix.save(tmp.name)
-            tmp.close()
-            canvas_obj.drawImage(tmp.name, 0, 0, width=W, height=H,
-                                  preserveAspectRatio=False)
-            os.unlink(tmp.name)
-            doc.close()
-    except Exception:
-        pass
+def _pick_template_page(template_path: str, fallback_path: str = ""):
+    """Retorna a página de template e o reader associado (ou None)."""
+    for path in [template_path, fallback_path]:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            reader = PdfReader(path)
+            if reader.pages:
+                return reader.pages[0], reader
+        except Exception:
+            continue
+    return None, None
 
 
 def gerar_certificado_pdf(
@@ -292,29 +290,16 @@ def gerar_certificado_pdf(
     template_frente: str = "",
     template_verso: str = "",
 ):
-    """Gera o PDF do certificado (frente + verso) com templates opcionais."""
+    """Gera o PDF do certificado (frente + verso) com templates opcionais.
+
+    O conteúdo textual é sempre desenhado acima do template para evitar
+    que edições prévias no template escondam o texto do certificado.
+    """
     tmp_id = uuid.uuid4().hex[:8]
     tmp_frente = output_path + f".frente_{tmp_id}.pdf"
     tmp_verso = output_path + f".verso_{tmp_id}.pdf"
 
     styles = getSampleStyleSheet()
-
-    # ── Frente ──────────────────────────────────────────────────────────────
-    class FrenteCanvas(pdf_canvas.Canvas):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._saved = []
-
-        def showPage(self):
-            self._saved.append(dict(self.__dict__))
-            self._startPage()
-
-        def save(self):
-            for idx, state in enumerate(self._saved):
-                self.__dict__.update(state)
-                _draw_page_background(self, template_frente, 0)
-                super().showPage()
-            super().save()
 
     doc_frente = SimpleDocTemplate(
         tmp_frente, pagesize=PAGE_SIZE,
@@ -323,25 +308,7 @@ def gerar_certificado_pdf(
     )
     doc_frente.build(
         _build_frente_story(styles, aprendiz, texto, instrutor, carga, data, local),
-        canvasmaker=FrenteCanvas,
     )
-
-    # ── Verso ───────────────────────────────────────────────────────────────
-    class VersoCanvas(pdf_canvas.Canvas):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._saved = []
-
-        def showPage(self):
-            self._saved.append(dict(self.__dict__))
-            self._startPage()
-
-        def save(self):
-            for idx, state in enumerate(self._saved):
-                self.__dict__.update(state)
-                _draw_page_background(self, template_verso, 0)
-                super().showPage()
-            super().save()
 
     doc_verso = SimpleDocTemplate(
         tmp_verso, pagesize=PAGE_SIZE,
@@ -350,15 +317,24 @@ def gerar_certificado_pdf(
     )
     doc_verso.build(
         _build_verso_story(styles, aprendiz, topicos, instrutor, carga, data),
-        canvasmaker=VersoCanvas,
     )
 
-    # ── Junta frente + verso ─────────────────────────────────────────────────
+    # ── Junta frente + verso aplicando template como camada inferior ───────
     writer = PdfWriter()
-    for tmp in [tmp_frente, tmp_verso]:
-        reader = PdfReader(tmp)
-        for page in reader.pages:
-            writer.add_page(page)
+    page_configs = [
+        (tmp_frente, template_frente, ""),
+        (tmp_verso, template_verso, template_frente),
+    ]
+    for content_pdf, template_pdf, fallback in page_configs:
+        content_reader = PdfReader(content_pdf)
+        content_page = content_reader.pages[0]
+        template_page, _ = _pick_template_page(template_pdf, fallback)
+        if template_page is not None:
+            final_page = template_page.copy()
+            final_page.merge_page(content_page)
+            writer.add_page(final_page)
+        else:
+            writer.add_page(content_page)
     with open(output_path, "wb") as f:
         writer.write(f)
 
@@ -548,6 +524,7 @@ class CertificadoApp(ctk.CTk):
 
         self._suspend_preview = False
         self._last_pdf = ""
+        self._lista_nomes = []
 
         self._build_ui()
         self._load_cfg_to_ui()
@@ -630,6 +607,19 @@ class CertificadoApp(ctk.CTk):
                                            font=ctk.CTkFont(size=14))
         self._ent_aprendiz.pack(fill="x", padx=4, pady=(0, 6))
         self._ent_aprendiz.bind("<KeyRelease>", self._on_field_change)
+        self._lbl_lista_nomes = ctk.CTkLabel(
+            left,
+            text="Lista: não carregada",
+            text_color="#6A7D8D",
+            font=ctk.CTkFont(size=10),
+        )
+        self._lbl_lista_nomes.pack(anchor="w", padx=4, pady=(0, 4))
+        row_lista = ctk.CTkFrame(left, fg_color="transparent")
+        row_lista.pack(fill="x", padx=4, pady=(0, 6))
+        ctk.CTkButton(row_lista, text="Importar lista TXT", width=130,
+                      command=self._importar_lista_nomes).pack(side="left")
+        ctk.CTkButton(row_lista, text="Limpar lista", width=96,
+                      command=self._limpar_lista_nomes).pack(side="left", padx=6)
 
         ctk.CTkFrame(left, height=1, fg_color="#2A3A4A").pack(fill="x", pady=4)
 
@@ -758,12 +748,21 @@ class CertificadoApp(ctk.CTk):
         self._txt_topicos.insert("1.0", self.cfg.get("topicos", ""))
         self._txt_topicos.edit_modified(False)
 
+        lista_path = self.cfg.get("lista_nomes_path", "")
+        if lista_path and os.path.exists(lista_path):
+            self._carregar_lista_nomes(lista_path, atualizar_preview=False)
+        else:
+            self._atualizar_label_lista_nomes()
+
         self._suspend_preview = False
 
     # ── Coleta dados da UI ────────────────────────────────────────────────────
     def _collect_params(self) -> dict:
+        aprendiz_preview = self._ent_aprendiz.get().strip()
+        if self._lista_nomes:
+            aprendiz_preview = self._lista_nomes[0]
         return dict(
-            aprendiz=self._ent_aprendiz.get().strip(),
+            aprendiz=aprendiz_preview,
             texto=self._txt_texto.get("1.0", "end").strip(),
             topicos=self._txt_topicos.get("1.0", "end").strip(),
             instrutor=self._ent_instrutor.get().strip(),
@@ -783,6 +782,7 @@ class CertificadoApp(ctk.CTk):
         self.cfg["data_realizacao"] = self._ent_data.get().strip()
         self.cfg["local"] = self._ent_local.get().strip()
         self.cfg["preview_auto"] = bool(self._chk_auto.get())
+        self.cfg["lista_nomes_path"] = self.cfg.get("lista_nomes_path", "")
         save_config(self.cfg)
 
     # ── Templates ───────────────────────────────────────────────────────────
@@ -850,40 +850,75 @@ class CertificadoApp(ctk.CTk):
 
     # ── Gerar PDF ─────────────────────────────────────────────────────────────
     def _gerar(self):
-        aprendiz = self._ent_aprendiz.get().strip()
-        if not aprendiz:
+        aprendiz_digitado = self._ent_aprendiz.get().strip()
+        nomes_geracao = list(self._lista_nomes) if self._lista_nomes else []
+        if not nomes_geracao and not aprendiz_digitado:
             messagebox.showerror("Erro", "Informe o nome do participante.")
             return
+        if not nomes_geracao:
+            nomes_geracao = [aprendiz_digitado]
 
-        save = filedialog.asksaveasfilename(
-            initialdir=self.cfg.get("last_dir") or os.path.expanduser("~"),
-            defaultextension=".pdf",
-            filetypes=[("PDF", "*.pdf")],
-            initialfile=f"Certificado - {aprendiz}.pdf",
-        )
-        if not save:
-            return
-        self.cfg["last_dir"] = os.path.dirname(save)
+        if len(nomes_geracao) == 1:
+            save = filedialog.asksaveasfilename(
+                initialdir=self.cfg.get("last_dir") or os.path.expanduser("~"),
+                defaultextension=".pdf",
+                filetypes=[("PDF", "*.pdf")],
+                initialfile=f"Certificado - {nomes_geracao[0]}.pdf",
+            )
+            if not save:
+                return
+            output_paths = [(nomes_geracao[0], save)]
+            self.cfg["last_dir"] = os.path.dirname(save)
+        else:
+            out_dir = filedialog.askdirectory(
+                initialdir=self.cfg.get("last_dir") or os.path.expanduser("~"),
+                title="Selecione a pasta de saída para os certificados",
+            )
+            if not out_dir:
+                return
+            output_paths = []
+            for nome in nomes_geracao:
+                filename = f"Certificado - {_sanitize_filename(nome)}.pdf"
+                output_paths.append((nome, os.path.join(out_dir, filename)))
+            self.cfg["last_dir"] = out_dir
         self._sync_cfg()
 
-        self._status.configure(text="Gerando PDF...")
-        params = self._collect_params()
+        self._status.configure(
+            text="Gerando PDF..." if len(output_paths) == 1
+            else f"Gerando {len(output_paths)} PDFs..."
+        )
+        params_base = self._collect_params()
 
         def _worker():
             try:
-                gerar_certificado_pdf(output_path=save, **params)
-                self.after(0, lambda: self._on_gerar_ok(save))
+                ultimo_arquivo = ""
+                for nome, path in output_paths:
+                    params = dict(params_base)
+                    params["aprendiz"] = nome
+                    gerar_certificado_pdf(output_path=path, **params)
+                    ultimo_arquivo = path
+                self.after(
+                    0,
+                    lambda p=ultimo_arquivo, total=len(output_paths): self._on_gerar_ok(p, total),
+                )
             except Exception as e:
                 self.after(0, lambda err=str(e): self._on_gerar_err(err))
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _on_gerar_ok(self, path):
+    def _on_gerar_ok(self, path, total_arquivos=1):
         self._last_pdf = path
-        self._status.configure(text=f"PDF gerado: {os.path.basename(path)}")
+        if total_arquivos == 1:
+            self._status.configure(text=f"PDF gerado: {os.path.basename(path)}")
+        else:
+            self._status.configure(text=f"{total_arquivos} PDFs gerados com sucesso.")
         self._btn_abrir.pack(side="left", padx=6)
-        if messagebox.askyesno("Sucesso",
-                                f"Certificado gerado!\n{os.path.basename(path)}\n\nAbrir agora?"):
+        if total_arquivos == 1:
+            msg = f"Certificado gerado!\n{os.path.basename(path)}\n\nAbrir agora?"
+        else:
+            msg = (f"Foram gerados {total_arquivos} certificados.\n"
+                   f"Último arquivo: {os.path.basename(path)}\n\nAbrir último PDF agora?")
+        if messagebox.askyesno("Sucesso", msg):
             self._abrir_pdf()
 
     def _on_gerar_err(self, err):
@@ -906,6 +941,50 @@ class CertificadoApp(ctk.CTk):
 
     def _limpar_aprendiz(self):
         self._ent_aprendiz.delete(0, "end")
+        if self._chk_auto.get():
+            self._schedule_preview()
+
+    def _atualizar_label_lista_nomes(self):
+        if self._lista_nomes:
+            origem = os.path.basename(self.cfg.get("lista_nomes_path", ""))
+            self._lbl_lista_nomes.configure(
+                text=f"Lista: {len(self._lista_nomes)} nomes ({origem})"
+            )
+        else:
+            self._lbl_lista_nomes.configure(text="Lista: não carregada")
+
+    def _carregar_lista_nomes(self, path: str, atualizar_preview=True):
+        with open(path, "r", encoding="utf-8") as f:
+            nomes = [linha.strip() for linha in f if linha.strip()]
+        if not nomes:
+            raise ValueError("O arquivo TXT não contém nomes válidos.")
+        self._lista_nomes = nomes
+        self.cfg["lista_nomes_path"] = path
+        self.cfg["last_dir"] = os.path.dirname(path)
+        self._atualizar_label_lista_nomes()
+        save_config(self.cfg)
+        if atualizar_preview:
+            self._schedule_preview()
+
+    def _importar_lista_nomes(self):
+        path = filedialog.askopenfilename(
+            initialdir=self.cfg.get("last_dir") or os.path.expanduser("~"),
+            filetypes=[("Arquivo TXT", "*.txt")],
+        )
+        if not path:
+            return
+        try:
+            self._carregar_lista_nomes(path)
+        except Exception as exc:
+            messagebox.showerror("Erro ao importar lista", str(exc))
+
+    def _limpar_lista_nomes(self):
+        self._lista_nomes = []
+        self.cfg["lista_nomes_path"] = ""
+        self._atualizar_label_lista_nomes()
+        save_config(self.cfg)
+        if self._chk_auto.get():
+            self._schedule_preview()
 
     # ── Módulos ───────────────────────────────────────────────────────────────
     def _switch_module(self):
