@@ -37,7 +37,7 @@ SECTION_HEADERS = {
 }
 
 PHOTO_LAYOUT_MODES = ["Dividir página", "Página inteira"]
-WATERMARK_MODES = ["Central", "Timbrado aleatório"]
+WATERMARK_MODES = ["Central", "Timbrado aleatório", "Central + Timbrado aleatório"]
 WATERMARK_RANDOM_COUNT_OPTIONS = ["4", "6", "8", "10", "12", "14", "16", "20"]
 HORARIOS_DESCRICAO_PRESETS = ["", "Hora técnica", "Deslocamento"]
 
@@ -855,7 +855,9 @@ def gerar_pdf(
                 image = ImageReader(wm_path)
                 iw, ih = image.getSize()
                 wm_mode = str(watermark_mode or "Central")
-                if wm_mode == "Timbrado aleatório":
+                apply_random = wm_mode in ("Timbrado aleatório", "Central + Timbrado aleatório")
+                apply_central = wm_mode in ("Central", "Central + Timbrado aleatório")
+                if apply_random:
                     import random
 
                     rng = random.Random(page_number * 1777)
@@ -877,7 +879,7 @@ def gerar_pdf(
                         canvas_obj.rotate(rot)
                         canvas_obj.drawImage(image, -draw_w / 2, -draw_h / 2, draw_w, draw_h, preserveAspectRatio=True, mask="auto")
                         canvas_obj.restoreState()
-                else:
+                if apply_central:
                     max_w = A4[0] * scale
                     max_h = A4[1] * scale
                     factor = min(max_w / iw, max_h / ih)
