@@ -1117,7 +1117,6 @@ class PreviewPanel(ctk.CTkFrame):
         super().__init__(master, **kwargs)
 
         self._label_status = ctk.CTkLabel(self, text="A pré-visualização aparecerá aqui...", text_color="#8A9BAD")
-        self._label_status.pack(expand=True)
 
         self._nav_frame = ctk.CTkFrame(self, fg_color="transparent")
         self._btn_prev = ctk.CTkButton(self._nav_frame, text="◀", width=36, command=self._prev_page)
@@ -1151,6 +1150,10 @@ class PreviewPanel(ctk.CTkFrame):
         self._canvas.bind("<Button-5>", self._on_mousewheel)
         self._canvas.bind("<Button-1>", self._on_pan_start)
         self._canvas.bind("<B1-Motion>", self._on_pan_move)
+
+        self._nav_frame.pack(pady=(8, 2))
+        self._canvas_container.pack(expand=True, fill="both", padx=8, pady=4)
+        self._label_status.place(relx=0.5, rely=0.5, anchor="center")
 
         self._pages = []
         self._tk_images = []
@@ -1196,20 +1199,27 @@ class PreviewPanel(ctk.CTkFrame):
         self._canvas.scan_dragto(event.x, event.y, gain=1)
 
     def update_pages(self, images):
-        self._label_status.pack_forget()
-        self._nav_frame.pack(pady=(8, 2))
-        self._canvas_container.pack(expand=True, fill="both", padx=8, pady=4)
+        self._label_status.place_forget()
         self._pages = images
+        if self._current_page >= len(self._pages):
+            self._current_page = max(0, len(self._pages) - 1)
         self._show_page()
 
     def show_status(self, msg):
-        self._nav_frame.pack_forget()
-        self._canvas_container.pack_forget()
         self._label_status.configure(text=msg)
-        self._label_status.pack(expand=True)
+        if self._pages:
+            self._label_status.place(relx=0.5, rely=0.08, anchor="n")
+            return
+        self._canvas.delete("all")
+        self._lbl_page.configure(text="")
+        self._label_status.place(relx=0.5, rely=0.5, anchor="center")
 
     def show_generating(self):
-        self.show_status("⏳ A atualizar pré-visualização...")
+        if self._pages:
+            self._label_status.configure(text="⏳ A atualizar pré-visualização...")
+            self._label_status.place(relx=0.5, rely=0.08, anchor="n")
+        else:
+            self.show_status("⏳ A atualizar pré-visualização...")
 
     def _show_page(self):
         if not self._pages:
