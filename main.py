@@ -3,30 +3,27 @@ import subprocess
 import sys
 import json
 from pathlib import Path
+from module_registry import discover_modules, available_module_names, DEFAULT_MODULE
 
 
 BASE_DIR = Path(__file__).resolve().parent
 LAUNCHER_STATE_FILE = BASE_DIR / "launcher_state.json"
-DEFAULT_MODULE = "gerar_relatorio.py"
-MODULES = {
-    "gerar_relatorio.py": "Gerar Relatórios",
-    "gerar_certificado.py": "Gerar Certificados (exemplo)",
-}
 
 
 def load_last_module() -> str:
+    available_modules = available_module_names()
     if not LAUNCHER_STATE_FILE.exists():
         return DEFAULT_MODULE
     try:
         data = json.loads(LAUNCHER_STATE_FILE.read_text(encoding="utf-8"))
         module = data.get("last_module", DEFAULT_MODULE)
-        return module if module in MODULES else DEFAULT_MODULE
+        return module if module in available_modules else DEFAULT_MODULE
     except Exception:
         return DEFAULT_MODULE
 
 
 def save_last_module(module_filename: str):
-    if module_filename not in MODULES:
+    if module_filename not in available_module_names():
         return
     LAUNCHER_STATE_FILE.write_text(
         json.dumps({"last_module": module_filename}, ensure_ascii=False, indent=2),
@@ -59,21 +56,14 @@ class MainApp(ctk.CTk):
             text_color=("#4A5568", "#A0AEC0"),
         ).pack(pady=(0, 18))
 
-        ctk.CTkButton(
-            container,
-            text="Gerar Relatórios",
-            width=220,
-            height=40,
-            command=lambda: self._open_module("gerar_relatorio.py", close_launcher=True),
-        ).pack(pady=6)
-
-        ctk.CTkButton(
-            container,
-            text="Gerar Certificados (exemplo)",
-            width=220,
-            height=40,
-            command=lambda: self._open_module("gerar_certificado.py", close_launcher=True),
-        ).pack(pady=6)
+        for module_filename, module_label in discover_modules():
+            ctk.CTkButton(
+                container,
+                text=module_label,
+                width=220,
+                height=40,
+                command=lambda filename=module_filename: self._open_module(filename, close_launcher=True),
+            ).pack(pady=6)
 
         self.status_label = ctk.CTkLabel(container, text="Pronto.", anchor="w")
         self.status_label.pack(fill="x", pady=(14, 0), padx=8)

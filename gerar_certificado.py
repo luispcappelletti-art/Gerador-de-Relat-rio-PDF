@@ -1,13 +1,14 @@
 import customtkinter as ctk
+import tkinter as tk
 from tkinter import messagebox
 import json
 import os
 import subprocess
 import sys
+from module_registry import discover_modules
 
 
 LAUNCHER_STATE_FILE = os.path.join(os.path.dirname(__file__), "launcher_state.json")
-MODULE_RELATORIO = "gerar_relatorio.py"
 
 
 def save_last_module(module_filename):
@@ -34,11 +35,21 @@ class CertificadoApp(ctk.CTk):
             font=ctk.CTkFont(size=18, weight="bold"),
         ).pack(pady=(10, 12))
 
-        ctk.CTkButton(
-            frame,
-            text="Ir para Relatórios",
-            command=lambda: self._switch_module(MODULE_RELATORIO),
-        ).pack(anchor="w", padx=10, pady=(0, 8))
+        self.current_module = "gerar_certificado.py"
+        self._module_targets = {label: name for name, label in discover_modules() if name != self.current_module}
+        self._module_label_var = tk.StringVar(value=self._default_module_target_label())
+
+        switch_row = ctk.CTkFrame(frame, fg_color="transparent")
+        switch_row.pack(fill="x", padx=10, pady=(0, 8))
+        ctk.CTkLabel(switch_row, text="Ir para:").pack(side="left")
+        self._module_menu = ctk.CTkOptionMenu(
+            switch_row,
+            variable=self._module_label_var,
+            values=self._menu_values(),
+            width=250,
+        )
+        self._module_menu.pack(side="left", padx=(8, 6))
+        ctk.CTkButton(switch_row, text="Abrir", command=self._switch_to_selected_module).pack(side="left")
 
         ctk.CTkLabel(frame, text="Nome do participante:").pack(anchor="w", padx=10)
         self.nome_entry = ctk.CTkEntry(frame, placeholder_text="Digite o nome")
@@ -83,6 +94,21 @@ class CertificadoApp(ctk.CTk):
             "Aqui você poderá implementar a geração real do certificado.",
         )
         self.status.configure(text="Função de geração (exemplo) executada.")
+
+    def _menu_values(self):
+        return list(self._module_targets.keys()) or ["Nenhuma outra tela disponível"]
+
+    def _default_module_target_label(self):
+        values = self._menu_values()
+        return values[0]
+
+    def _switch_to_selected_module(self):
+        module_label = self._module_label_var.get()
+        module_filename = self._module_targets.get(module_label)
+        if not module_filename:
+            messagebox.showwarning("Aviso", "Nenhuma outra tela disponível no momento.")
+            return
+        self._switch_module(module_filename)
 
     def _switch_module(self, module_filename):
         module_path = os.path.join(os.path.dirname(__file__), module_filename)
