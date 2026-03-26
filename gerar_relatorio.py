@@ -24,6 +24,8 @@ except Exception:
     TkinterDnD = None
 
 CONFIG_FILE = "config.json"
+LAUNCHER_STATE_FILE = os.path.join(os.path.dirname(__file__), "launcher_state.json")
+MODULE_CERTIFICADO = "gerar_certificado.py"
 SECOES_EDITAVEIS = ["descricao", "detalhamento", "diagnostico", "acoes", "resultado", "estado"]
 SECOES_PAINEL = ["cabecalho", *SECOES_EDITAVEIS]
 
@@ -158,6 +160,14 @@ def load_config():
 def save_config(config):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+def save_last_module(module_filename):
+    try:
+        with open(LAUNCHER_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"last_module": module_filename}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def add_recent_pdf(config, path):
@@ -1608,6 +1618,12 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.label.pack(side="left")
 
         ctk.CTkButton(top, text="Selecionar Template", width=160, command=self.select_template).pack(side="left", padx=8)
+        ctk.CTkButton(
+            top,
+            text="Ir para Certificados",
+            width=150,
+            command=lambda: self._switch_module(MODULE_CERTIFICADO),
+        ).pack(side="left", padx=4)
         self._tecnico_btn = ctk.CTkButton(top, text="Trocar técnico", width=120, command=self._change_tecnico_login)
         self._tecnico_btn.pack(side="left", padx=4)
         self._tecnico_label = ctk.CTkLabel(top, text="", text_color="#7D93A8")
@@ -1790,6 +1806,18 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.bind("<Control-S>", lambda e: self._save_text_to_file())
         self.bind("<Control-o>", lambda e: self._abrir_ultimo_pdf())
         self.bind("<Control-O>", lambda e: self._abrir_ultimo_pdf())
+
+    def _switch_module(self, module_filename):
+        module_path = os.path.join(os.path.dirname(__file__), module_filename)
+        if not os.path.exists(module_path):
+            messagebox.showerror("Erro", f"Módulo não encontrado: {module_filename}")
+            return
+        try:
+            save_last_module(module_filename)
+            subprocess.Popen([sys.executable, module_path])
+            self.destroy()
+        except Exception as exc:
+            messagebox.showerror("Erro", f"Falha ao abrir módulo: {exc}")
 
     # ── Recentes ──────────────────────────────────────────────────────
     def _build_recents_bar(self):
@@ -2346,6 +2374,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
 
 
 if __name__ == "__main__":
+    save_last_module("gerar_relatorio.py")
     ctk.set_appearance_mode("dark")
     app = App()
     app.mainloop()

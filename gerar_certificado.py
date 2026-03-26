@@ -1,5 +1,21 @@
 import customtkinter as ctk
 from tkinter import messagebox
+import json
+import os
+import subprocess
+import sys
+
+
+LAUNCHER_STATE_FILE = os.path.join(os.path.dirname(__file__), "launcher_state.json")
+MODULE_RELATORIO = "gerar_relatorio.py"
+
+
+def save_last_module(module_filename):
+    try:
+        with open(LAUNCHER_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"last_module": module_filename}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 class CertificadoApp(ctk.CTk):
@@ -17,6 +33,12 @@ class CertificadoApp(ctk.CTk):
             text="Tela de exemplo - Gerar Certificado",
             font=ctk.CTkFont(size=18, weight="bold"),
         ).pack(pady=(10, 12))
+
+        ctk.CTkButton(
+            frame,
+            text="Ir para Relatórios",
+            command=lambda: self._switch_module(MODULE_RELATORIO),
+        ).pack(anchor="w", padx=10, pady=(0, 8))
 
         ctk.CTkLabel(frame, text="Nome do participante:").pack(anchor="w", padx=10)
         self.nome_entry = ctk.CTkEntry(frame, placeholder_text="Digite o nome")
@@ -62,8 +84,21 @@ class CertificadoApp(ctk.CTk):
         )
         self.status.configure(text="Função de geração (exemplo) executada.")
 
+    def _switch_module(self, module_filename):
+        module_path = os.path.join(os.path.dirname(__file__), module_filename)
+        if not os.path.exists(module_path):
+            messagebox.showerror("Erro", f"Módulo não encontrado: {module_filename}")
+            return
+        try:
+            save_last_module(module_filename)
+            subprocess.Popen([sys.executable, module_path])
+            self.destroy()
+        except Exception as exc:
+            messagebox.showerror("Erro", f"Falha ao abrir módulo: {exc}")
+
 
 if __name__ == "__main__":
+    save_last_module("gerar_certificado.py")
     ctk.set_appearance_mode("dark")
     app = CertificadoApp()
     app.mainloop()
