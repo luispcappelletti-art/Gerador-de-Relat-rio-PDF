@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import ttk
 import json, os, re, threading, tempfile, subprocess, sys, uuid
+from copy import deepcopy
 
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
@@ -330,7 +331,7 @@ def gerar_certificado_pdf(
         content_page = content_reader.pages[0]
         template_page, _ = _pick_template_page(template_pdf, fallback)
         if template_page is not None:
-            final_page = template_page.copy()
+            final_page = deepcopy(template_page)
             final_page.merge_page(content_page)
             writer.add_page(final_page)
         else:
