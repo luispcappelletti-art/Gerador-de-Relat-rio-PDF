@@ -11,6 +11,7 @@ from reportlab.lib.styles import *
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas as pdf_canvas
+from reportlab.pdfbase import pdfmetrics
 
 from pypdf import PdfReader, PdfWriter
 import fitz  # pymupdf — instale com: pip install pymupdf
@@ -514,7 +515,12 @@ def gerar_pdf(
         cover_font_size = min(13.5, 10.2 * cover_scale)
         cover_padding = max(4, int(6 * cover_scale))
         largura_total = A4[0] - (5.0 * cm)
-        largura_label = largura_total * 0.34
+        largura_label_min = largura_total * 0.34
+        largura_label_max = largura_total * 0.56
+        maior_rotulo = max((str(label).strip() for label, _ in header_rows), key=len, default="")
+        largura_rotulo_pt = pdfmetrics.stringWidth(maior_rotulo, "Helvetica-Bold", cover_font_size)
+        largura_label_necessaria = largura_rotulo_pt + (cover_padding * 2) + 6
+        largura_label = min(max(largura_label_necessaria, largura_label_min), largura_label_max)
         largura_valor = largura_total - largura_label
         dados_tabela = [
             [
