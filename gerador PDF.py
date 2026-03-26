@@ -37,6 +37,7 @@ SECTION_HEADERS = {
 }
 
 PHOTO_LAYOUT_MODES = ["Dividir página", "Página inteira"]
+WATERMARK_MODES = ["Central", "Timbrado aleatório"]
 
 INFO_ALIASES = {
     "equipamento": "equipamento",
@@ -137,6 +138,7 @@ def load_config():
         "watermark_path": "",
         "watermark_opacity": "0.12",
         "watermark_scale": "0.75",
+        "watermark_mode": "Central",
         "cover_header_scale": "1.8",
         "signature_page": True,
         "recent_pdfs": [],
@@ -626,6 +628,7 @@ def gerar_pdf(
     watermark_path="",
     watermark_opacity=0.12,
     watermark_scale=0.75,
+    watermark_mode="Central",
     cover_header_scale=1.8,
     include_signature_page=False,
 ):
@@ -842,16 +845,40 @@ def gerar_pdf(
             try:
                 image = ImageReader(wm_path)
                 iw, ih = image.getSize()
-                max_w = A4[0] * scale
-                max_h = A4[1] * scale
-                factor = min(max_w / iw, max_h / ih)
-                draw_w = iw * factor
-                draw_h = ih * factor
-                x = (A4[0] - draw_w) / 2
-                y = (A4[1] - draw_h) / 2
-                canvas_obj.setFillAlpha(op)
-                canvas_obj.drawImage(image, x, y, draw_w, draw_h, preserveAspectRatio=True, mask="auto")
-                canvas_obj.setFillAlpha(1)
+                wm_mode = str(watermark_mode or "Central")
+                if wm_mode == "Timbrado aleatório":
+                    import random
+
+                    rng = random.Random(page_number * 1777)
+                    logos = max(5, min(14, int(8 * scale)))
+                    min_factor = max(0.07, 0.11 * scale)
+                    max_factor = max(min_factor + 0.02, min(0.28, 0.19 * scale + 0.08))
+                    for _ in range(logos):
+                        factor = rng.uniform(min_factor, max_factor)
+                        draw_w = iw * factor
+                        draw_h = ih * factor
+                        max_x = max(1.0, A4[0] - draw_w)
+                        max_y = max(1.0, A4[1] - draw_h)
+                        x = rng.uniform(0, max_x)
+                        y = rng.uniform(0, max_y)
+                        rot = rng.uniform(-25, 25)
+                        canvas_obj.saveState()
+                        canvas_obj.setFillAlpha(max(0.02, min(0.30, op * 0.85)))
+                        canvas_obj.translate(x + draw_w / 2, y + draw_h / 2)
+                        canvas_obj.rotate(rot)
+                        canvas_obj.drawImage(image, -draw_w / 2, -draw_h / 2, draw_w, draw_h, preserveAspectRatio=True, mask="auto")
+                        canvas_obj.restoreState()
+                else:
+                    max_w = A4[0] * scale
+                    max_h = A4[1] * scale
+                    factor = min(max_w / iw, max_h / ih)
+                    draw_w = iw * factor
+                    draw_h = ih * factor
+                    x = (A4[0] - draw_w) / 2
+                    y = (A4[1] - draw_h) / 2
+                    canvas_obj.setFillAlpha(op)
+                    canvas_obj.drawImage(image, x, y, draw_w, draw_h, preserveAspectRatio=True, mask="auto")
+                    canvas_obj.setFillAlpha(1)
             except Exception:
                 pass
         if page_number > 1:
@@ -975,6 +1002,7 @@ class PreviewEngine:
         self._current_watermark_path = ""
         self._current_watermark_opacity = 0.12
         self._current_watermark_scale = 0.75
+        self._current_watermark_mode = "Central"
         self._current_cover_header_scale = 1.8
         self._current_signature_page = False
         self._temp_dir = tempfile.mkdtemp()
@@ -993,6 +1021,7 @@ class PreviewEngine:
         watermark_path="",
         watermark_opacity=0.12,
         watermark_scale=0.75,
+        watermark_mode="Central",
         cover_header_scale=1.8,
         include_signature_page=False,
     ):
@@ -1008,6 +1037,7 @@ class PreviewEngine:
             self._current_watermark_path = watermark_path or ""
             self._current_watermark_opacity = watermark_opacity
             self._current_watermark_scale = watermark_scale
+            self._current_watermark_mode = watermark_mode or "Central"
             self._current_cover_header_scale = cover_header_scale
             self._current_signature_page = include_signature_page
             if self._timer is not None:
@@ -1031,6 +1061,7 @@ class PreviewEngine:
             watermark_path = self._current_watermark_path
             watermark_opacity = self._current_watermark_opacity
             watermark_scale = self._current_watermark_scale
+            watermark_mode = self._current_watermark_mode
             cover_header_scale = self._current_cover_header_scale
             include_signature_page = self._current_signature_page
 
@@ -1052,6 +1083,7 @@ class PreviewEngine:
                 watermark_path=watermark_path,
                 watermark_opacity=watermark_opacity,
                 watermark_scale=watermark_scale,
+                watermark_mode=watermark_mode,
                 cover_header_scale=cover_header_scale,
                 include_signature_page=include_signature_page,
             )
@@ -1258,6 +1290,9 @@ class HorariosTableEditor(ctk.CTkFrame):
         self.tree.pack(fill="both", expand=True, padx=6, pady=(2, 6))
         self.tree.bind("<Delete>", lambda _e: self._remove_selected())
         self.tree.bind("<Double-1>", self._begin_inline_edit)
+        self.tree.bind("<Double-Button-1>", self._begin_inline_edit)
+        self.tree.bind("<Return>", self._begin_inline_edit_from_focus)
+        self.tree.bind("<F2>", self._begin_inline_edit_from_focus)
 
     def _add_empty_row(self):
         row_id = self.tree.insert("", "end", values=["", "", "", ""])
@@ -1265,6 +1300,23 @@ class HorariosTableEditor(ctk.CTkFrame):
         self.tree.focus(row_id)
         if self._on_change:
             self._on_change()
+
+    def _begin_inline_edit_from_focus(self, _event=None):
+        row_id = self.tree.focus() or (self.tree.selection()[0] if self.tree.selection() else "")
+        if not row_id:
+            return
+        bbox = self.tree.bbox(row_id, "#1")
+        if not bbox:
+            return
+        x, y, w, h = bbox
+
+        class _Ev:
+            pass
+
+        fake = _Ev()
+        fake.x = x + 4
+        fake.y = y + (h // 2)
+        self._begin_inline_edit(fake)
 
     def _remove_selected(self):
         selected = self.tree.selection()
@@ -1357,6 +1409,9 @@ class HeaderTableEditor(ctk.CTkFrame):
 
         self.tree.bind("<Delete>", lambda _e: self._remove_selected())
         self.tree.bind("<Double-1>", self._begin_inline_edit)
+        self.tree.bind("<Double-Button-1>", self._begin_inline_edit)
+        self.tree.bind("<Return>", self._begin_inline_edit_from_focus)
+        self.tree.bind("<F2>", self._begin_inline_edit_from_focus)
 
     def _add_empty_row(self):
         row_id = self.tree.insert("", "end", values=["", ""])
@@ -1418,6 +1473,23 @@ class HeaderTableEditor(ctk.CTkFrame):
         if self._on_change:
             self._on_change()
 
+    def _begin_inline_edit_from_focus(self, _event=None):
+        row_id = self.tree.focus() or (self.tree.selection()[0] if self.tree.selection() else "")
+        if not row_id:
+            return
+        bbox = self.tree.bbox(row_id, "#1")
+        if not bbox:
+            return
+        x, y, w, h = bbox
+
+        class _Ev:
+            pass
+
+        fake = _Ev()
+        fake.x = x + 4
+        fake.y = y + (h // 2)
+        self._begin_inline_edit(fake)
+
     def get_rows(self):
         return [list(self.tree.item(item, "values")) for item in self.tree.get_children("")]
 
@@ -1449,6 +1521,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data.setdefault("last_dir", "")
         self.config_data.setdefault("default_tecnico", "")
         self.config_data.setdefault("signature_page", True)
+        self.config_data.setdefault("watermark_mode", "Central")
         self.config_data.setdefault("recent_pdfs", [])
 
         self.fotos = []
@@ -1514,6 +1587,11 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         ctk.CTkOptionMenu(options, variable=self.watermark_scale_var,
                           values=["0.40", "0.55", "0.75", "0.90", "1.05", "1.25", "1.45"],
                           width=76, command=lambda _v: self._on_watermark_change()).pack(side="left")
+        ctk.CTkLabel(options, text="modo:").pack(side="left", padx=(6, 2))
+        self.watermark_mode_var = tk.StringVar(value=str(self.config_data.get("watermark_mode", "Central")))
+        ctk.CTkOptionMenu(options, variable=self.watermark_mode_var,
+                          values=WATERMARK_MODES,
+                          width=170, command=lambda _v: self._on_watermark_change()).pack(side="left")
 
         ctk.CTkLabel(options, text="  Capa:").pack(side="left", padx=(6, 2))
         self.cover_header_scale_var = tk.StringVar(value=str(self.config_data.get("cover_header_scale", "1.8")))
@@ -1824,6 +1902,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def _on_watermark_change(self):
         self.config_data["watermark_opacity"] = str(self.watermark_opacity_var.get())
         self.config_data["watermark_scale"] = str(self.watermark_scale_var.get())
+        self.config_data["watermark_mode"] = str(self.watermark_mode_var.get())
         if self.chk_auto_var.get():
             self.force_preview_update()
 
@@ -1871,6 +1950,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             watermark_path=self.config_data.get("watermark_path", ""),
             watermark_opacity=float(self.watermark_opacity_var.get()),
             watermark_scale=float(self.watermark_scale_var.get()),
+            watermark_mode=str(self.watermark_mode_var.get()),
             cover_header_scale=float(self.cover_header_scale_var.get()),
             include_signature_page=bool(self.signature_var.get()),
         )
@@ -1912,6 +1992,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data["section_offsets_cm"] = self._get_section_offsets_cm()
         self.config_data["watermark_opacity"] = str(self.watermark_opacity_var.get())
         self.config_data["watermark_scale"] = str(self.watermark_scale_var.get())
+        self.config_data["watermark_mode"] = str(self.watermark_mode_var.get())
         self.config_data["cover_header_scale"] = str(self.cover_header_scale_var.get())
         self.config_data["signature_page"] = bool(self.signature_var.get())
         save_config(self.config_data)
@@ -2133,6 +2214,7 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                     watermark_path=self.config_data.get("watermark_path", ""),
                     watermark_opacity=float(self.watermark_opacity_var.get()),
                     watermark_scale=float(self.watermark_scale_var.get()),
+                    watermark_mode=str(self.watermark_mode_var.get()),
                     cover_header_scale=float(self.cover_header_scale_var.get()),
                     include_signature_page=bool(self.signature_var.get()),
                 )
