@@ -66,6 +66,17 @@ INFO_ALIASES = {
     "tempo em espera": "tempo_espera",
     "tempo espera": "tempo_espera",
     "contato": "contato_cliente",
+    "nome do cliente": "cliente",
+    "contato no cliente": "contato_cliente",
+    "modelo da fonte": "modelo_fonte",
+    "controle de altura": "controle_altura",
+    "marca do cnc": "marca_cnc",
+    "data inicio": "data_inicio",
+    "data início": "data_inicio",
+    "data final": "data_final",
+    "tecnico responsavel": "tecnico",
+    "técnico responsável": "tecnico",
+    "motivo do chamado": "motivo_chamado",
 }
 
 INFO_FIELDS = [
@@ -85,6 +96,20 @@ INFO_FIELDS = [
     ("Tempo Espera", "tempo_espera"),
 ]
 MANDATORY_INFO_FIELDS = ("tecnico", "cliente")
+
+HEADER_DEFAULT_ROWS = [
+    ("Nome do Cliente", "cliente"),
+    ("Contato no cliente", "contato_cliente"),
+    ("Equipamento", "equipamento"),
+    ("Modelo da Fonte", "modelo_fonte"),
+    ("Controle de Altura", "controle_altura"),
+    ("Marca do CNC", "marca_cnc"),
+    ("Fabricante", "fabricante"),
+    ("Data início", "data_inicio"),
+    ("Data final", "data_final"),
+    ("Técnico Responsável", "tecnico"),
+    ("Motivo do chamado", "motivo_chamado"),
+]
 
 
 # =========================
@@ -351,6 +376,46 @@ def _parse_header_info_text(text):
     return _parse_info_from_editor(text)
 
 
+def _compose_header_rows(info, info_extra):
+    info = info or {}
+    info_extra = info_extra or []
+    rows = []
+    used_labels = set()
+    for label, key in HEADER_DEFAULT_ROWS:
+        value = str(info.get(key, "") or "").strip()
+        rows.append([label, value])
+        used_labels.add(normalize(label))
+    for label, value in info_extra:
+        raw_label = str(label or "").strip()
+        if not raw_label:
+            continue
+        if normalize(raw_label) in used_labels:
+            continue
+        rows.append([raw_label, str(value or "").strip()])
+    return rows
+
+
+def _parse_header_rows(rows):
+    info = {}
+    info_extra = []
+    header_rows = []
+    for row in rows or []:
+        label, value = (list(row) + ["", ""])[:2]
+        label = str(label or "").strip()
+        value = str(value or "").strip()
+        if not label:
+            continue
+        header_rows.append([label, value])
+        normalized_key = normalize(label)
+        info_key = INFO_ALIASES.get(normalized_key)
+        if info_key:
+            if value:
+                info[info_key] = value
+        elif value:
+            info_extra.append((label, value))
+    return info, info_extra, header_rows
+
+
 def _parse_horarios_table(raw_text):
     def _normalize_date(text):
         t = str(text or "").strip()
@@ -433,6 +498,9 @@ def gerar_pdf(
     styles.add(ParagraphStyle(name="Titulo",
                               fontSize=18, alignment=1, spaceAfter=6,
                               textColor=colors.HexColor("#0E2A44"), leading=22))
+    styles.add(ParagraphStyle(name="CoverTitle",
+                              fontSize=28, alignment=1, spaceAfter=12,
+                              textColor=colors.HexColor("#0A2238"), leading=32, fontName="Helvetica-Bold"))
 
     styles.add(ParagraphStyle(name="Secao",
                               fontSize=12.5, spaceBefore=14, spaceAfter=7,
@@ -444,14 +512,13 @@ def gerar_pdf(
     story = []
 
     info = sections.get("info", {})
-    dados = []
-
-    for label, key in INFO_FIELDS:
-        valor = info.get(key)
-        if _valor_info_preenchido(valor):
-            dados.append([label, str(valor).strip()])
-
-    if dados:
+    header_rows = sections.get("header_rows")
+    if not header_rows:
+        header_rows = _compose_header_rows(info, sections.get("info_extra", []))
+    if header_rows:
+        story.append(Spacer(1, 0.9 * cm))
+        story.append(Paragraph("Relatório de Atendimento Técnico", styles["CoverTitle"]))
+        story.append(Spacer(1, 0.6 * cm))
         cover_scale = max(1.0, min(3.0, float(cover_header_scale or 1.8)))
         cover_font_size = min(13.5, 10.2 * cover_scale)
         cover_padding = max(4, int(6 * cover_scale))
@@ -477,7 +544,7 @@ def gerar_pdf(
                     wordWrap="CJK",
                 )),
             ]
-            for label, valor in dados
+            for label, valor in header_rows
         ]
         tabela = Table(dados_tabela, colWidths=[largura_label, largura_valor], repeatRows=0)
         tabela.setStyle(TableStyle([
@@ -491,7 +558,7 @@ def gerar_pdf(
             ("BOTTOMPADDING", (0, 0), (-1, -1), max(4, int(7 * cover_scale))),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ]))
-        story.append(Spacer(1, max(1.4, (3.4 - cover_scale)) * cm))
+        story.append(Spacer(1, 0.5 * cm))
         story.append(tabela)
     else:
         story.append(Spacer(1, 4.5 * cm))
@@ -1034,6 +1101,97 @@ class HorariosTableEditor(ctk.CTkFrame):
             self.tree.delete(item)
 
 
+class HeaderTableEditor(ctk.CTkFrame):
+    COLUMNS = ("topico", "resposta")
+
+    def __init__(self, master, on_change=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self._on_change = on_change
+
+        controls = ctk.CTkFrame(self, fg_color="transparent")
+        controls.pack(fill="x", padx=6, pady=(6, 2))
+
+        self.inputs = {}
+        for label, key, width in (("Tópico", "topico", 230), ("Resposta", "resposta", 320)):
+            ctk.CTkLabel(controls, text=label).pack(side="left", padx=(0, 4))
+            entry = ctk.CTkEntry(controls, width=width)
+            entry.pack(side="left", padx=(0, 8), fill="x", expand=(key == "resposta"))
+            self.inputs[key] = entry
+
+        ctk.CTkButton(controls, text="Adicionar", width=90, command=self._add_row).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(controls, text="Atualizar", width=90, command=self._update_selected).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(controls, text="Remover", width=90, command=self._remove_selected).pack(side="left")
+
+        self.tree = ttk.Treeview(self, columns=self.COLUMNS, show="headings", height=9)
+        self.tree.heading("topico", text="Tópico")
+        self.tree.heading("resposta", text="Resposta")
+        self.tree.column("topico", width=260, anchor="w", stretch=True)
+        self.tree.column("resposta", width=420, anchor="w", stretch=True)
+        self.tree.pack(fill="both", expand=True, padx=6, pady=(2, 6))
+
+        self.tree.bind("<<TreeviewSelect>>", self._load_selected_to_inputs)
+        self.tree.bind("<Delete>", lambda _e: self._remove_selected())
+
+    def _collect_inputs(self):
+        return [self.inputs["topico"].get().strip(), self.inputs["resposta"].get().strip()]
+
+    def _clear_inputs(self):
+        for entry in self.inputs.values():
+            entry.delete(0, "end")
+
+    def _load_selected_to_inputs(self, _event=None):
+        selected = self.tree.selection()
+        if not selected:
+            return
+        values = list(self.tree.item(selected[0], "values"))
+        self._clear_inputs()
+        self.inputs["topico"].insert(0, values[0] if len(values) > 0 else "")
+        self.inputs["resposta"].insert(0, values[1] if len(values) > 1 else "")
+
+    def _add_row(self):
+        topico, resposta = self._collect_inputs()
+        if not topico:
+            return
+        self.tree.insert("", "end", values=[topico, resposta])
+        self._clear_inputs()
+        if self._on_change:
+            self._on_change()
+
+    def _update_selected(self):
+        selected = self.tree.selection()
+        if not selected:
+            return
+        topico, resposta = self._collect_inputs()
+        if not topico:
+            return
+        self.tree.item(selected[0], values=[topico, resposta])
+        if self._on_change:
+            self._on_change()
+
+    def _remove_selected(self):
+        selected = self.tree.selection()
+        if not selected:
+            return
+        for item in selected:
+            self.tree.delete(item)
+        self._clear_inputs()
+        if self._on_change:
+            self._on_change()
+
+    def get_rows(self):
+        return [list(self.tree.item(item, "values")) for item in self.tree.get_children("")]
+
+    def set_rows(self, rows):
+        self.clear()
+        for row in rows or []:
+            label, value = (list(row) + ["", ""])[:2]
+            self.tree.insert("", "end", values=[label, value])
+
+    def clear(self):
+        for item in self.tree.get_children(""):
+            self.tree.delete(item)
+
+
 class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -1177,6 +1335,14 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             if key == "horarios":
                 box = HorariosTableEditor(frame, on_change=self._on_horarios_table_change)
                 box.pack(fill="both", expand=True, padx=6, pady=6)
+            elif key == "cabecalho":
+                ctk.CTkLabel(
+                    frame,
+                    text="Padrão da capa carregado. Você pode editar, excluir ou adicionar tópicos.",
+                    text_color="#8EA1B2",
+                ).pack(anchor="w", padx=8, pady=(6, 0))
+                box = HeaderTableEditor(frame, on_change=self._on_header_table_change)
+                box.pack(fill="both", expand=True, padx=6, pady=6)
             else:
                 box = ctk.CTkTextbox(frame, wrap="word", height=110)
                 box.pack(fill="both", expand=True, padx=6, pady=6)
@@ -1299,19 +1465,30 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         if self.chk_auto_var.get():
             self.force_preview_update()
 
+    def _on_header_table_change(self):
+        if self._suspend_section_events:
+            return
+        if self.chk_auto_var.get():
+            self.force_preview_update()
+
     def _get_section_offsets_cm(self):
         return {key: _coerce_offset_cm(var.get()) for key, var in self.section_offset_vars.items()}
 
     def _get_sections_from_ui(self):
         texto = limpar_texto(self.text.get("1.0", "end").strip())
         sections = parse_text(texto)
-        cabecalho = self.section_widgets["cabecalho"].get("1.0", "end")
-        info, info_extra = _parse_info_from_editor(cabecalho)
+        header_rows = self.section_widgets["cabecalho"].get_rows()
+        info, info_extra, parsed_rows = _parse_header_rows(header_rows)
         sections["info"] = info
         sections["info_extra"] = info_extra
+        sections["header_rows"] = parsed_rows
         tecnico_salvo = str(self.config_data.get("default_tecnico", "")).strip()
         if tecnico_salvo and not _valor_info_preenchido(sections["info"].get("tecnico")):
             sections["info"]["tecnico"] = tecnico_salvo
+            for row in sections["header_rows"]:
+                if normalize(row[0]) in {"tecnico responsavel", "técnico responsável"} and not str(row[1]).strip():
+                    row[1] = tecnico_salvo
+                    break
         for key, box in self.section_widgets.items():
             if key in {"cabecalho", "horarios"}:
                 continue
@@ -1337,14 +1514,11 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         try:
             for key, box in self.section_widgets.items():
                 if key == "cabecalho":
-                    box.delete("1.0", "end")
-                    composed = _compose_info_text(
+                    rows = _compose_header_rows(
                         sections.get("info", {}),
                         sections.get("info_extra", []),
-                        include_required_empty=True,
                     )
-                    box.insert("1.0", composed)
-                    box.edit_modified(False)
+                    box.set_rows(rows)
                 elif key == "horarios":
                     box.set_rows([])
                 else:
