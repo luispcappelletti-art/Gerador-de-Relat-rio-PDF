@@ -16,6 +16,7 @@ from reportlab.pdfbase import pdfmetrics
 from pypdf import PdfReader, PdfWriter
 import fitz  # pymupdf
 from PIL import Image as PILImage, ImageTk
+from module_registry import discover_modules
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -25,7 +26,6 @@ except Exception:
 
 CONFIG_FILE = "config.json"
 LAUNCHER_STATE_FILE = os.path.join(os.path.dirname(__file__), "launcher_state.json")
-MODULE_CERTIFICADO = "gerar_certificado.py"
 SECOES_EDITAVEIS = ["descricao", "detalhamento", "diagnostico", "acoes", "resultado", "estado"]
 SECOES_PAINEL = ["cabecalho", *SECOES_EDITAVEIS]
 
@@ -1618,12 +1618,18 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.label.pack(side="left")
 
         ctk.CTkButton(top, text="Selecionar Template", width=160, command=self.select_template).pack(side="left", padx=8)
-        ctk.CTkButton(
+        self.current_module = "gerar_relatorio.py"
+        self._module_targets = {label: name for name, label in discover_modules() if name != self.current_module}
+        self._module_label_var = tk.StringVar(value=self._default_module_target_label())
+        ctk.CTkLabel(top, text="Ir para:").pack(side="left", padx=(4, 2))
+        self._module_menu = ctk.CTkOptionMenu(
             top,
-            text="Ir para Certificados",
-            width=150,
-            command=lambda: self._switch_module(MODULE_CERTIFICADO),
-        ).pack(side="left", padx=4)
+            variable=self._module_label_var,
+            values=self._menu_values(),
+            width=210,
+        )
+        self._module_menu.pack(side="left", padx=(0, 4))
+        ctk.CTkButton(top, text="Abrir", width=80, command=self._switch_to_selected_module).pack(side="left", padx=2)
         self._tecnico_btn = ctk.CTkButton(top, text="Trocar técnico", width=120, command=self._change_tecnico_login)
         self._tecnico_btn.pack(side="left", padx=4)
         self._tecnico_label = ctk.CTkLabel(top, text="", text_color="#7D93A8")
@@ -1818,6 +1824,21 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             self.destroy()
         except Exception as exc:
             messagebox.showerror("Erro", f"Falha ao abrir módulo: {exc}")
+
+    def _menu_values(self):
+        return list(self._module_targets.keys()) or ["Nenhuma outra tela disponível"]
+
+    def _default_module_target_label(self):
+        values = self._menu_values()
+        return values[0]
+
+    def _switch_to_selected_module(self):
+        module_label = self._module_label_var.get()
+        module_filename = self._module_targets.get(module_label)
+        if not module_filename:
+            messagebox.showwarning("Aviso", "Nenhuma outra tela disponível no momento.")
+            return
+        self._switch_module(module_filename)
 
     # ── Recentes ──────────────────────────────────────────────────────
     def _build_recents_bar(self):
