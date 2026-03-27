@@ -44,6 +44,7 @@ DEFAULTS = {
     "template_verso":  "",
     "lista_nomes_path": "",
     "texto_corpo": "concluiu satisfatoriamente o:",
+    "nome_empresa": "BAW Brasil Ind. e Com. Ltda",
     "nome_curso": "",
     "supervisor": "",
     "supervisor_cargo": "Supervisor técnico",
@@ -55,6 +56,32 @@ DEFAULTS = {
     "last_dir": "",
     "window_geometry": "1600x900",
     "preview_auto": True,
+    "layout": {},
+    "separar_frente_verso": False,
+    "usar_assinatura_supervisor": False,
+    "usar_assinatura_instrutor": False,
+    "assinatura_supervisor_path": "",
+    "assinatura_instrutor_path": "",
+}
+
+LAYOUT_DEFAULTS = {
+    # Frente
+    "frente_header_y": H - MARGIN - 1.0 * cm,
+    "frente_nome_gap": 1.6 * cm,
+    "frente_linha_gap": 0.45 * cm,
+    "frente_corpo_gap": 0.8 * cm,
+    "frente_curso_gap": 0.55 * cm,
+    "frente_duracao_gap": 1.0 * cm,
+    "frente_info_gap": 0.55 * cm,
+    "frente_assin_y": MARGIN + 1.8 * cm,
+    "frente_assin_x_offset": 0.0,
+    # Verso
+    "verso_titulo_y": H - MARGIN - 1.2 * cm,
+    "verso_linha_gap": 0.45 * cm,
+    "verso_topicos_gap": 0.7 * cm,
+    "verso_topicos_x": MARGIN + 1.5 * cm,
+    "verso_topicos_line_h": 0.52 * cm,
+    "verso_rodape_y": MARGIN + 0.8 * cm,
 }
 
 
@@ -90,12 +117,33 @@ def _sanitize(value: str) -> str:
     return re.sub(r"\s+", " ", nome).strip() or "Participante"
 
 
+def _layout_from_params(params: dict) -> dict:
+    lay = dict(LAYOUT_DEFAULTS)
+    lay.update(params.get("layout") or {})
+    return lay
+
+
+def _draw_signature_image(c: rl_canvas.Canvas, path: str, cx: float, base_y: float, width: float = 4.5 * cm):
+    if not path or not os.path.exists(path):
+        return
+    try:
+        img = PILImage.open(path)
+        iw, ih = img.size
+        if iw <= 0 or ih <= 0:
+            return
+        h = width * (ih / iw)
+        c.drawImage(path, cx - width / 2, base_y + 0.55 * cm, width=width, height=h, mask="auto")
+    except Exception:
+        pass
+
+
 # ─── Geração do PDF ───────────────────────────────────────────────────────────
 
 def _draw_frente(c: rl_canvas.Canvas, params: dict):
     """Desenha a frente do certificado sobre a canvas."""
     aprendiz     = params.get("aprendiz", "")
     texto_corpo  = params.get("texto_corpo", "concluiu satisfatoriamente o:")
+    nome_empresa = params.get("nome_empresa", "BAW Brasil Ind. e Com. Ltda")
     nome_curso   = params.get("nome_curso", "")
     supervisor   = params.get("supervisor", "")
     sup_cargo    = params.get("supervisor_cargo", "Supervisor técnico")
@@ -103,18 +151,19 @@ def _draw_frente(c: rl_canvas.Canvas, params: dict):
     inst_cargo   = params.get("instrutor_cargo", "Instrutor técnico")
     carga        = params.get("carga_horaria", "")
     mes_ano      = params.get("mes_ano", "")
+    layout       = _layout_from_params(params)
 
     cx = W / 2  # centro horizontal
 
     # ── Cabeçalho: "A BAW Brasil Ind. e Com. Ltda certifica que:" ────────────
-    y = H - MARGIN - 1.0 * cm
+    y = float(layout["frente_header_y"])
     c.setFont("Helvetica", 13)
     c.setFillColor(CINZA_TEXTO)
-    cabecalho = "A BAW Brasil Ind. e Com. Ltda certifica que:"
+    cabecalho = f"A {nome_empresa or 'BAW Brasil Ind. e Com. Ltda'} certifica que:"
     c.drawCentredString(cx, y, cabecalho)
 
     # ── Nome do aprendiz ─────────────────────────────────────────────────────
-    y -= 1.6 * cm
+    y -= float(layout["frente_nome_gap"])
     c.setFont("Helvetica-Bold", 38)
     c.setFillColor(AZUL_ESCURO)
     nome_display = (aprendiz or "[NOME DO PARTICIPANTE]").upper()
@@ -126,21 +175,21 @@ def _draw_frente(c: rl_canvas.Canvas, params: dict):
     c.drawCentredString(cx, y, nome_display)
 
     # ── Linha separadora sob o nome ───────────────────────────────────────────
-    y -= 0.45 * cm
+    y -= float(layout["frente_linha_gap"])
     lw = min(c.stringWidth(nome_display, "Helvetica-Bold", fs) + 1.5 * cm, W - 4 * MARGIN)
     c.setStrokeColor(AZUL_CLARO)
     c.setLineWidth(0.8)
     c.line(cx - lw/2, y, cx + lw/2, y)
 
     # ── Texto corpo ──────────────────────────────────────────────────────────
-    y -= 0.8 * cm
+    y -= float(layout["frente_corpo_gap"])
     c.setFont("Helvetica", 12)
     c.setFillColor(CINZA_SUB)
     c.drawCentredString(cx, y, texto_corpo)
 
     # ── Nome do curso ────────────────────────────────────────────────────────
     if nome_curso and nome_curso.strip():
-        y -= 0.55 * cm
+        y -= float(layout["frente_curso_gap"])
         c.setFont("Helvetica-Bold", 14)
         c.setFillColor(AZUL_ESCURO)
         # Quebra linha se necessário
@@ -156,30 +205,33 @@ def _draw_frente(c: rl_canvas.Canvas, params: dict):
         if linha_atual:
             linhas.append(linha_atual)
         for ln in linhas:
-            y -= 0.5 * cm
+            y -= float(layout["frente_curso_gap"]) * 0.9
             c.drawCentredString(cx, y, ln)
 
     # ── Duração e Mês/Ano ────────────────────────────────────────────────────
-    y -= 1.0 * cm
+    y -= float(layout["frente_duracao_gap"])
     c.setFont("Helvetica", 11)
     c.setFillColor(CINZA_TEXTO)
     if carga:
         c.drawCentredString(cx, y, f"Duração: {carga}")
-        y -= 0.55 * cm
+        y -= float(layout["frente_info_gap"])
     if mes_ano:
         c.drawCentredString(cx, y, mes_ano)
-        y -= 0.55 * cm
+        y -= float(layout["frente_info_gap"])
 
     # ── Assinaturas ──────────────────────────────────────────────────────────
-    y_assin = MARGIN + 1.8 * cm
+    y_assin = float(layout["frente_assin_y"])
+    x_off   = float(layout["frente_assin_x_offset"])
     col_w   = (W - 2 * MARGIN) * 0.28
-    x_left  = MARGIN + col_w * 0.5
-    x_right = W - MARGIN - col_w * 0.5
+    x_left  = MARGIN + col_w * 0.5 + x_off
+    x_right = W - MARGIN - col_w * 0.5 + x_off
 
-    for x_col, nome_sig, cargo_sig in [
-        (x_left,  supervisor, sup_cargo),
-        (x_right, instrutor,  inst_cargo),
+    for x_col, nome_sig, cargo_sig, assinatura, usar_assinatura in [
+        (x_left,  supervisor, sup_cargo, params.get("assinatura_supervisor_path", ""), params.get("usar_assinatura_supervisor", False)),
+        (x_right, instrutor,  inst_cargo, params.get("assinatura_instrutor_path", ""), params.get("usar_assinatura_instrutor", False)),
     ]:
+        if usar_assinatura:
+            _draw_signature_image(c, assinatura, x_col, y_assin)
         # Linha de assinatura
         c.setStrokeColor(AZUL_ESCURO)
         c.setLineWidth(0.8)
@@ -200,29 +252,30 @@ def _draw_verso(c: rl_canvas.Canvas, params: dict):
     instrutor = params.get("instrutor", "")
     carga    = params.get("carga_horaria", "")
     data     = params.get("mes_ano", "")
+    layout   = _layout_from_params(params)
 
     cx = W / 2
 
     # ── Título ────────────────────────────────────────────────────────────────
-    y = H - MARGIN - 1.2 * cm
+    y = float(layout["verso_titulo_y"])
     c.setFont("Helvetica-Bold", 20)
     c.setFillColor(AZUL_ESCURO)
     c.drawCentredString(cx, y, "Conteúdo Treinamento de Processos e Operação Baw")
 
     # Linha decorativa
-    y -= 0.45 * cm
+    y -= float(layout["verso_linha_gap"])
     c.setStrokeColor(AZUL_CLARO)
     c.setLineWidth(1.0)
     c.line(MARGIN + 1 * cm, y, W - MARGIN - 1 * cm, y)
 
     # ── Lista de tópicos ──────────────────────────────────────────────────────
-    y -= 0.7 * cm
+    y -= float(layout["verso_topicos_gap"])
     c.setFont("Helvetica", 11)
     c.setFillColor(CINZA_TEXTO)
 
     linhas = [l.strip() for l in (topicos or "").strip().splitlines() if l.strip()]
-    x_txt  = MARGIN + 1.5 * cm
-    line_h = 0.52 * cm
+    x_txt  = float(layout["verso_topicos_x"])
+    line_h = float(layout["verso_topicos_line_h"])
 
     for ln in linhas:
         if y < MARGIN + 2 * cm:
@@ -242,7 +295,7 @@ def _draw_verso(c: rl_canvas.Canvas, params: dict):
         y -= line_h
 
     # ── Rodapé verso ─────────────────────────────────────────────────────────
-    y_rod = MARGIN + 0.8 * cm
+    y_rod = float(layout["verso_rodape_y"])
     partes = []
     if aprendiz: partes.append(f"Participante: {aprendiz}")
     if instrutor: partes.append(f"Instrutor: {instrutor}")
@@ -269,7 +322,20 @@ def _pick_template(template_path: str):
 def gerar_certificado_pdf(output_path: str, params: dict,
                           template_frente: str = "",
                           template_verso: str = ""):
-    """Gera PDF (frente + verso) sobrepondo conteúdo ao template."""
+    """Gera PDF único (frente + verso) sobrepondo conteúdo ao template."""
+    gerar_certificado_pdf_separado(
+        output_frente="",
+        output_verso="",
+        output_combinado=output_path,
+        params=params,
+        template_frente=template_frente,
+        template_verso=template_verso,
+    )
+
+
+def gerar_certificado_pdf_separado(output_frente: str, output_verso: str, output_combinado: str,
+                                   params: dict, template_frente: str = "", template_verso: str = ""):
+    """Gera frente/verso separados e/ou combinado."""
     tmp = tempfile.mkdtemp()
     tmp_f = os.path.join(tmp, "frente.pdf")
     tmp_v = os.path.join(tmp, "verso.pdf")
@@ -285,28 +351,36 @@ def gerar_certificado_pdf(output_path: str, params: dict,
     c.save()
 
     # ── Merge: template (fundo) + conteúdo (cima) ─────────────────────────────
-    writer = PdfWriter()
-    for content_pdf, tpl_path, fallback in [
-        (tmp_f, template_frente, ""),
-        (tmp_v, template_verso,  template_frente),
-    ]:
+    final_pages = []
+    for content_pdf, tpl_path, fallback in [(tmp_f, template_frente, ""), (tmp_v, template_verso, template_frente)]:
         content_page = PdfReader(content_pdf).pages[0]
-        tpl_page, _  = _pick_template(tpl_path)
+        tpl_page, _ = _pick_template(tpl_path)
         if tpl_page is None and fallback:
             tpl_page, _ = _pick_template(fallback)
-
+        w = PdfWriter()
         if tpl_page is not None:
-            final = writer.add_blank_page(
+            final = w.add_blank_page(
                 width=float(tpl_page.mediabox.width),
                 height=float(tpl_page.mediabox.height),
             )
             final.merge_page(tpl_page)
             final.merge_page(content_page)
         else:
-            writer.add_page(content_page)
+            w.add_page(content_page)
+        final_pages.append(w)
 
-    with open(output_path, "wb") as f:
-        writer.write(f)
+    if output_frente:
+        with open(output_frente, "wb") as f:
+            final_pages[0].write(f)
+    if output_verso:
+        with open(output_verso, "wb") as f:
+            final_pages[1].write(f)
+    if output_combinado:
+        writer = PdfWriter()
+        writer.add_page(final_pages[0].pages[0])
+        writer.add_page(final_pages[1].pages[0])
+        with open(output_combinado, "wb") as f:
+            writer.write(f)
 
     # limpeza
     for p in [tmp_f, tmp_v]:
@@ -598,6 +672,12 @@ class App(ctk.CTk):
 
         # Curso
         sec("CURSO / TREINAMENTO")
+        ctk.CTkLabel(left, text="Nome da empresa (cabeçalho):",
+                     text_color="#8AAAC8", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=8, pady=(6,1))
+        self._ent_empresa = ctk.CTkEntry(left)
+        self._ent_empresa.pack(fill="x", padx=8, pady=(0, 2))
+        self._ent_empresa.bind("<KeyRelease>", self._field_changed)
+
         ctk.CTkLabel(left, text="Texto intro (ex: 'concluiu satisfatoriamente o:'):",
                      text_color="#8AAAC8", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=8, pady=(6,1))
         self._ent_corpo = ctk.CTkEntry(left)
@@ -623,6 +703,14 @@ class App(ctk.CTk):
         self._ent_supervisor_cargo = entry(left, "Supervisor — Cargo:", "Supervisor técnico")
         self._ent_instrutor        = entry(left, "Instrutor — Nome:",   "Ex: Marco Silva")
         self._ent_instrutor_cargo  = entry(left, "Instrutor — Cargo:",  "Instrutor técnico")
+        self._chk_assin_sup = tk.BooleanVar(value=False)
+        self._chk_assin_inst = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(left, text="Usar assinatura digital do supervisor",
+                        variable=self._chk_assin_sup, command=self._field_changed).pack(anchor="w", padx=8, pady=(4, 1))
+        self._lbl_assin_sup = self._signature_row(left, "Assin. Supervisor:", "supervisor")
+        ctk.CTkCheckBox(left, text="Usar assinatura digital do instrutor",
+                        variable=self._chk_assin_inst, command=self._field_changed).pack(anchor="w", padx=8, pady=(4, 1))
+        self._lbl_assin_inst = self._signature_row(left, "Assin. Instrutor:", "instrutor")
 
         # Tópicos verso
         sec("TÓPICOS — VERSO DO CERTIFICADO")
@@ -634,6 +722,38 @@ class App(ctk.CTk):
                                             wrap="word")
         self._txt_topicos.pack(fill="x", padx=8, pady=(4, 8))
         self._txt_topicos.bind("<<Modified>>", self._textbox_changed)
+
+        sec("POSIÇÃO DOS ELEMENTOS (lembra automaticamente)")
+        self._layout_vars = {}
+        for key, label in [
+            ("frente_header_y", "Frente: Y do cabeçalho"),
+            ("frente_nome_gap", "Frente: espaço p/ nome"),
+            ("frente_assin_y", "Frente: Y assinaturas"),
+            ("frente_assin_x_offset", "Frente: desloc. X assinaturas"),
+            ("verso_titulo_y", "Verso: Y título"),
+            ("verso_topicos_x", "Verso: X tópicos"),
+            ("verso_topicos_line_h", "Verso: altura linha tópicos"),
+            ("verso_rodape_y", "Verso: Y rodapé"),
+        ]:
+            row = ctk.CTkFrame(left, fg_color="transparent")
+            row.pack(fill="x", padx=8, pady=(2, 0))
+            ctk.CTkLabel(row, text=label, width=220, anchor="w", text_color="#8AAAC8").pack(side="left")
+            v = tk.StringVar()
+            self._layout_vars[key] = v
+            e = ctk.CTkEntry(row, width=120, textvariable=v, placeholder_text="pt")
+            e.pack(side="left", padx=(6, 2))
+            e.bind("<KeyRelease>", self._layout_field_changed)
+        ctk.CTkLabel(left, text="Valores em pontos (pt). Ex.: 72 = 1 polegada.",
+                     text_color="#5B7A9D", font=ctk.CTkFont(size=10)).pack(anchor="w", padx=8, pady=(2, 4))
+
+        sec("GERAÇÃO DE ARQUIVOS")
+        self._chk_separar = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            left,
+            text="Gerar frente e verso em PDFs separados (se desmarcado: 1 PDF com 2 páginas)",
+            variable=self._chk_separar,
+            command=self._field_changed,
+        ).pack(anchor="w", padx=8, pady=(6, 8))
 
         # ── Painel prévia (direita) ───────────────────────────────────────────
         right = ctk.CTkFrame(main, fg_color="transparent")
@@ -679,6 +799,20 @@ class App(ctk.CTk):
                       fg_color="#3A1A1A", hover_color="#5A2A2A").pack(side="left")
         return lbl
 
+    def _signature_row(self, parent, label, key):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=8, pady=2)
+        ctk.CTkLabel(row, text=label, width=120, text_color="#8AAAC8").pack(side="left")
+        lbl = ctk.CTkLabel(row, text="Não selecionado", text_color="#4A7A9D",
+                           font=ctk.CTkFont(size=10), anchor="w")
+        lbl.pack(side="left", fill="x", expand=True, padx=(4, 8))
+        ctk.CTkButton(row, text="Selecionar", width=90,
+                      command=lambda: self._pick_signature(key, lbl)).pack(side="left", padx=2)
+        ctk.CTkButton(row, text="Limpar", width=66,
+                      command=lambda: self._clear_signature(key, lbl),
+                      fg_color="#3A1A1A", hover_color="#5A2A2A").pack(side="left")
+        return lbl
+
     def _switch_module(self, module_filename):
         module_path = os.path.join(os.path.dirname(__file__), module_filename)
         if not os.path.exists(module_path):
@@ -717,6 +851,7 @@ class App(ctk.CTk):
             lbl.configure(text=os.path.basename(p) if p and os.path.exists(p) else "Não selecionado")
 
         pairs = [
+            (self._ent_empresa,         "nome_empresa"),
             (self._ent_corpo,           "texto_corpo"),
             (self._ent_carga,           "carga_horaria"),
             (self._ent_mes_ano,         "mes_ano"),
@@ -737,6 +872,15 @@ class App(ctk.CTk):
         self._txt_topicos.insert("1.0", self.cfg.get("topicos", ""))
         self._txt_topicos.edit_modified(False)
 
+        self._chk_separar.set(bool(self.cfg.get("separar_frente_verso", False)))
+        self._chk_assin_sup.set(bool(self.cfg.get("usar_assinatura_supervisor", False)))
+        self._chk_assin_inst.set(bool(self.cfg.get("usar_assinatura_instrutor", False)))
+        self._lbl_assin_sup.configure(text=os.path.basename(self.cfg.get("assinatura_supervisor_path", "")) or "Não selecionado")
+        self._lbl_assin_inst.configure(text=os.path.basename(self.cfg.get("assinatura_instrutor_path", "")) or "Não selecionado")
+        lay = _layout_from_params({"layout": self.cfg.get("layout", {})})
+        for k, v in self._layout_vars.items():
+            v.set(f"{float(lay.get(k, LAYOUT_DEFAULTS.get(k, 0.0))):.2f}")
+
         lista_path = self.cfg.get("lista_nomes_path", "")
         if lista_path and os.path.exists(lista_path):
             self._load_lista_file(lista_path, preview=False)
@@ -750,6 +894,7 @@ class App(ctk.CTk):
             aprendiz = self._lista_nomes[0]
         return dict(
             aprendiz          = aprendiz,
+            nome_empresa      = self._ent_empresa.get().strip(),
             texto_corpo       = self._ent_corpo.get().strip(),
             nome_curso        = self._ent_curso.get("1.0", "end").strip(),
             carga_horaria     = self._ent_carga.get().strip(),
@@ -759,13 +904,21 @@ class App(ctk.CTk):
             instrutor         = self._ent_instrutor.get().strip(),
             instrutor_cargo   = self._ent_instrutor_cargo.get().strip(),
             topicos           = self._txt_topicos.get("1.0", "end").strip(),
+            layout            = self._collect_layout(),
+            separar_frente_verso = bool(self._chk_separar.get()),
+            usar_assinatura_supervisor = bool(self._chk_assin_sup.get()),
+            usar_assinatura_instrutor = bool(self._chk_assin_inst.get()),
+            assinatura_supervisor_path = self.cfg.get("assinatura_supervisor_path", ""),
+            assinatura_instrutor_path = self.cfg.get("assinatura_instrutor_path", ""),
         )
 
     def _sync_cfg(self):
         c = self._collect()
-        for k in ["texto_corpo","nome_curso","carga_horaria","mes_ano",
-                  "supervisor","supervisor_cargo","instrutor","instrutor_cargo","topicos"]:
+        for k in ["nome_empresa","texto_corpo","nome_curso","carga_horaria","mes_ano",
+                  "supervisor","supervisor_cargo","instrutor","instrutor_cargo","topicos",
+                  "separar_frente_verso","usar_assinatura_supervisor","usar_assinatura_instrutor"]:
             self.cfg[k] = c.get(k, "")
+        self.cfg["layout"] = c.get("layout", {})
         self.cfg["preview_auto"] = bool(self._chk_auto.get())
         save_config(self.cfg)
 
@@ -790,20 +943,64 @@ class App(ctk.CTk):
         save_config(self.cfg)
         self._atualizar_preview()
 
+    def _pick_signature(self, key, lbl):
+        path = filedialog.askopenfilename(
+            initialdir=self.cfg.get("last_dir") or os.path.expanduser("~"),
+            filetypes=[("Imagem", "*.png *.jpg *.jpeg *.webp")],
+        )
+        if not path:
+            return
+        self.cfg[f"assinatura_{key}_path"] = path
+        self.cfg["last_dir"] = os.path.dirname(path)
+        lbl.configure(text=os.path.basename(path))
+        save_config(self.cfg)
+        self._atualizar_preview()
+
+    def _clear_signature(self, key, lbl):
+        self.cfg[f"assinatura_{key}_path"] = ""
+        lbl.configure(text="Não selecionado")
+        save_config(self.cfg)
+        self._atualizar_preview()
+
+    def _collect_layout(self):
+        lay = dict(LAYOUT_DEFAULTS)
+        for k, v in self._layout_vars.items():
+            txt = (v.get() or "").strip().replace(",", ".")
+            if not txt:
+                continue
+            try:
+                lay[k] = float(txt)
+            except ValueError:
+                continue
+        return lay
+
     # ──────────────────────────────────────────────────────────────────────────
     # Preview
     # ──────────────────────────────────────────────────────────────────────────
     def _field_changed(self, event=None):
-        if self._suspend or not self._chk_auto.get():
+        if self._suspend:
+            return
+        self._sync_cfg()
+        if not self._chk_auto.get():
             return
         self._atualizar_preview()
 
     def _textbox_changed(self, event=None):
         if event:
             event.widget.edit_modified(False)
-        if self._suspend or not self._chk_auto.get():
+        if self._suspend:
+            return
+        self._sync_cfg()
+        if not self._chk_auto.get():
             return
         self._atualizar_preview()
+
+    def _layout_field_changed(self, event=None):
+        if self._suspend:
+            return
+        if self._chk_auto.get():
+            self._atualizar_preview()
+        self._sync_cfg()
 
     def _atualizar_preview(self):
         params = self._collect()
@@ -847,16 +1044,16 @@ class App(ctk.CTk):
             nomes = [aprendiz_manual]
 
         if len(nomes) == 1:
-            save = filedialog.asksaveasfilename(
+            base_save = filedialog.asksaveasfilename(
                 initialdir=self.cfg.get("last_dir") or os.path.expanduser("~"),
                 defaultextension=".pdf",
                 filetypes=[("PDF", "*.pdf")],
                 initialfile=f"Certificado - {nomes[0]}.pdf",
             )
-            if not save:
+            if not base_save:
                 return
-            jobs = [(nomes[0], save)]
-            self.cfg["last_dir"] = os.path.dirname(save)
+            jobs = [(nomes[0], base_save)]
+            self.cfg["last_dir"] = os.path.dirname(base_save)
         else:
             out_dir = filedialog.askdirectory(
                 initialdir=self.cfg.get("last_dir") or os.path.expanduser("~"),
@@ -869,6 +1066,7 @@ class App(ctk.CTk):
 
         self._sync_cfg()
         params_base = self._collect()
+        separar = bool(params_base.get("separar_frente_verso"))
         tpl_f = self.cfg.get("template_frente", "")
         tpl_v = self.cfg.get("template_verso",  "")
 
@@ -880,8 +1078,15 @@ class App(ctk.CTk):
                 ultimo = ""
                 for nome, path in jobs:
                     p = dict(params_base); p["aprendiz"] = nome
-                    gerar_certificado_pdf(path, p, tpl_f, tpl_v)
-                    ultimo = path
+                    if separar:
+                        raiz, ext = os.path.splitext(path)
+                        frente = f"{raiz} - Frente{ext}"
+                        verso = f"{raiz} - Verso{ext}"
+                        gerar_certificado_pdf_separado(frente, verso, "", p, tpl_f, tpl_v)
+                        ultimo = verso
+                    else:
+                        gerar_certificado_pdf(path, p, tpl_f, tpl_v)
+                        ultimo = path
                 self.after(0, lambda u=ultimo, t=len(jobs): self._ok(u, t))
             except Exception as e:
                 self.after(0, lambda err=str(e): self._err(err))
