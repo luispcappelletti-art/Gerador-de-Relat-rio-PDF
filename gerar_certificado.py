@@ -10,6 +10,7 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import json, os, re, threading, tempfile, subprocess, sys, uuid, io
+from module_registry import discover_modules
 
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
@@ -28,6 +29,7 @@ W, H        = PAGE_SIZE          # 841.89 x 595.28 pts
 MARGIN      = 2.4 * cm
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config_certificado.json")
+LAUNCHER_STATE_FILE = os.path.join(os.path.dirname(__file__), "launcher_state.json")
 
 # Paleta de cores do template BAW (azul escuro / laranja)
 AZUL_ESCURO  = colors.HexColor("#0D1F5C")
@@ -71,6 +73,14 @@ def save_config(cfg: dict):
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def save_last_module(module_filename: str):
+    try:
+        with open(LAUNCHER_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"last_module": module_filename}, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
@@ -286,9 +296,12 @@ def gerar_certificado_pdf(output_path: str, params: dict,
             tpl_page, _ = _pick_template(fallback)
 
         if tpl_page is not None:
-            final = tpl_page.copy()
+            final = writer.add_blank_page(
+                width=float(tpl_page.mediabox.width),
+                height=float(tpl_page.mediabox.height),
+            )
+            final.merge_page(tpl_page)
             final.merge_page(content_page)
-            writer.add_page(final)
         else:
             writer.add_page(content_page)
 
@@ -499,6 +512,26 @@ class App(ctk.CTk):
                      font=ctk.CTkFont(size=15, weight="bold"),
                      text_color="#5BA4E8").pack(side="left", padx=16)
 
+        self.current_module = "gerar_certificado.py"
+        self._module_targets = {label: name for name, label in discover_modules() if name != self.current_module}
+        self._module_label_var = tk.StringVar(value=self._default_module_target_label())
+        ctk.CTkLabel(bar, text="Ir para:", text_color="#8AAAC8").pack(side="left", padx=(8, 2))
+        self._module_menu = ctk.CTkOptionMenu(
+            bar,
+            variable=self._module_label_var,
+            values=self._menu_values(),
+            width=220,
+        )
+        self._module_menu.pack(side="left", padx=(0, 4))
+        ctk.CTkButton(
+            bar,
+            text="Abrir",
+            width=84,
+            command=self._switch_to_selected_module,
+            fg_color="#1A3A6A",
+            hover_color="#0F2850",
+        ).pack(side="left", padx=(0, 8))
+
         right_bar = ctk.CTkFrame(bar, fg_color="transparent")
         right_bar.pack(side="right", padx=10)
 
@@ -645,6 +678,33 @@ class App(ctk.CTk):
                       command=lambda: self._clear_tpl(key, lbl),
                       fg_color="#3A1A1A", hover_color="#5A2A2A").pack(side="left")
         return lbl
+
+    def _switch_module(self, module_filename):
+        module_path = os.path.join(os.path.dirname(__file__), module_filename)
+        if not os.path.exists(module_path):
+            messagebox.showerror("Erro", f"Módulo não encontrado: {module_filename}")
+            return
+        try:
+            save_last_module(module_filename)
+            subprocess.Popen([sys.executable, module_path])
+            self.destroy()
+        except Exception as exc:
+            messagebox.showerror("Erro", f"Falha ao abrir módulo: {exc}")
+
+    def _menu_values(self):
+        return list(self._module_targets.keys()) or ["Nenhuma outra tela disponível"]
+
+    def _default_module_target_label(self):
+        values = self._menu_values()
+        return values[0]
+
+    def _switch_to_selected_module(self):
+        module_label = self._module_label_var.get()
+        module_filename = self._module_targets.get(module_label)
+        if not module_filename:
+            messagebox.showwarning("Aviso", "Nenhuma outra tela disponível no momento.")
+            return
+        self._switch_module(module_filename)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Carregar / coletar dados
@@ -906,5 +966,6 @@ class App(ctk.CTk):
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    save_last_module("gerar_certificado.py")
     app = App()
     app.mainloop()
