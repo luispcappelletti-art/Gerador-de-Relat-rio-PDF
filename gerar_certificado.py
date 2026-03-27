@@ -560,6 +560,7 @@ class App(ctk.CTk):
         self._lista_nomes: list[str] = []
         self._last_pdf = ""
         self._suspend  = False
+        self._position_labels = {}
 
         self._build_ui()
         self._load_ui()
@@ -656,6 +657,7 @@ class App(ctk.CTk):
                                            placeholder_text="Nome do participante")
         self._ent_aprendiz.pack(fill="x", padx=8, pady=(0, 4))
         self._ent_aprendiz.bind("<KeyRelease>", self._field_changed)
+        self._position_labels["aprendiz"] = self._create_position_label(left)
 
         # Lista
         self._lbl_lista = ctk.CTkLabel(left, text="Lista: não carregada",
@@ -677,12 +679,14 @@ class App(ctk.CTk):
         self._ent_empresa = ctk.CTkEntry(left)
         self._ent_empresa.pack(fill="x", padx=8, pady=(0, 2))
         self._ent_empresa.bind("<KeyRelease>", self._field_changed)
+        self._position_labels["nome_empresa"] = self._create_position_label(left)
 
         ctk.CTkLabel(left, text="Texto intro (ex: 'concluiu satisfatoriamente o:'):",
                      text_color="#8AAAC8", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=8, pady=(6,1))
         self._ent_corpo = ctk.CTkEntry(left)
         self._ent_corpo.pack(fill="x", padx=8, pady=(0, 2))
         self._ent_corpo.bind("<KeyRelease>", self._field_changed)
+        self._position_labels["texto_corpo"] = self._create_position_label(left)
 
         ctk.CTkLabel(left, text="Nome do curso/treinamento:",
                      text_color="#8AAAC8", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=8, pady=(4,1))
@@ -691,18 +695,25 @@ class App(ctk.CTk):
                                           wrap="word")
         self._ent_curso.pack(fill="x", padx=8, pady=(0, 2))
         self._ent_curso.bind("<<Modified>>", self._textbox_changed)
+        self._position_labels["nome_curso"] = self._create_position_label(left)
 
         # Informações
         sec("INFORMAÇÕES DO CERTIFICADO  (salvas automaticamente)")
         self._ent_carga   = entry(left, "Carga horária:",    "Ex: 4 horas")
+        self._position_labels["carga_horaria"] = self._create_position_label(left)
         self._ent_mes_ano = entry(left, "Mês / Ano:",        "Ex: Março, 2025")
+        self._position_labels["mes_ano"] = self._create_position_label(left)
 
         # Assinaturas
         sec("ASSINATURAS")
         self._ent_supervisor      = entry(left, "Supervisor — Nome:",  "Ex: Renato Castelan")
+        self._position_labels["supervisor"] = self._create_position_label(left)
         self._ent_supervisor_cargo = entry(left, "Supervisor — Cargo:", "Supervisor técnico")
+        self._position_labels["supervisor_cargo"] = self._create_position_label(left)
         self._ent_instrutor        = entry(left, "Instrutor — Nome:",   "Ex: Marco Silva")
+        self._position_labels["instrutor"] = self._create_position_label(left)
         self._ent_instrutor_cargo  = entry(left, "Instrutor — Cargo:",  "Instrutor técnico")
+        self._position_labels["instrutor_cargo"] = self._create_position_label(left)
         self._chk_assin_sup = tk.BooleanVar(value=False)
         self._chk_assin_inst = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(left, text="Usar assinatura digital do supervisor",
@@ -722,6 +733,7 @@ class App(ctk.CTk):
                                             wrap="word")
         self._txt_topicos.pack(fill="x", padx=8, pady=(4, 8))
         self._txt_topicos.bind("<<Modified>>", self._textbox_changed)
+        self._position_labels["topicos"] = self._create_position_label(left)
 
         sec("POSIÇÃO DOS ELEMENTOS (lembra automaticamente)")
         self._layout_vars = {}
@@ -887,6 +899,7 @@ class App(ctk.CTk):
         self._update_lista_label()
 
         self._suspend = False
+        self._update_position_labels()
 
     def _collect(self) -> dict:
         aprendiz = self._ent_aprendiz.get().strip()
@@ -974,6 +987,90 @@ class App(ctk.CTk):
                 continue
         return lay
 
+    def _create_position_label(self, parent):
+        lbl = ctk.CTkLabel(
+            parent,
+            text="Posição: aguardando dados",
+            text_color="#5B7A9D",
+            font=ctk.CTkFont(size=10),
+        )
+        lbl.pack(anchor="w", padx=8, pady=(0, 4))
+        return lbl
+
+    def _fmt_pos(self, x, y):
+        return f"x={float(x):.1f} pt · y={float(y):.1f} pt"
+
+    def _compute_positions(self, params: dict) -> dict:
+        layout = _layout_from_params(params)
+        cx = W / 2
+
+        positions = {}
+        y = float(layout["frente_header_y"])
+        positions["nome_empresa"] = self._fmt_pos(cx, y)
+
+        y -= float(layout["frente_nome_gap"])
+        nome_display = (params.get("aprendiz", "") or "[NOME DO PARTICIPANTE]").upper()
+        fs = 38
+        while pdfmetrics.stringWidth(nome_display, "Helvetica-Bold", fs) > W - 4 * MARGIN and fs > 18:
+            fs -= 1
+        positions["aprendiz"] = self._fmt_pos(cx, y)
+
+        y -= float(layout["frente_linha_gap"])
+        y -= float(layout["frente_corpo_gap"])
+        positions["texto_corpo"] = self._fmt_pos(cx, y)
+
+        nome_curso = (params.get("nome_curso") or "").strip()
+        if nome_curso:
+            y -= float(layout["frente_curso_gap"])
+            palavras = nome_curso.split()
+            linhas, linha_atual = [], ""
+            for palavra in palavras:
+                teste = (linha_atual + " " + palavra).strip()
+                if pdfmetrics.stringWidth(teste, "Helvetica-Bold", 14) > W - 4 * MARGIN and linha_atual:
+                    linhas.append(linha_atual)
+                    linha_atual = palavra
+                else:
+                    linha_atual = teste
+            if linha_atual:
+                linhas.append(linha_atual)
+            for _ in linhas:
+                y -= float(layout["frente_curso_gap"]) * 0.9
+            positions["nome_curso"] = self._fmt_pos(cx, y)
+        else:
+            positions["nome_curso"] = "Posição: sem conteúdo para calcular"
+
+        y -= float(layout["frente_duracao_gap"])
+        positions["carga_horaria"] = self._fmt_pos(cx, y)
+        if params.get("carga_horaria", "").strip():
+            y -= float(layout["frente_info_gap"])
+        positions["mes_ano"] = self._fmt_pos(cx, y)
+
+        y_assin = float(layout["frente_assin_y"]) + 0.15 * cm
+        x_off = float(layout["frente_assin_x_offset"])
+        col_w = (W - 2 * MARGIN) * 0.28
+        x_left = MARGIN + col_w * 0.5 + x_off
+        x_right = W - MARGIN - col_w * 0.5 + x_off
+        positions["supervisor"] = self._fmt_pos(x_left, y_assin)
+        positions["supervisor_cargo"] = self._fmt_pos(x_left, y_assin - 0.5 * cm)
+        positions["instrutor"] = self._fmt_pos(x_right, y_assin)
+        positions["instrutor_cargo"] = self._fmt_pos(x_right, y_assin - 0.5 * cm)
+
+        x_topicos = float(layout["verso_topicos_x"])
+        y_topicos = float(layout["verso_titulo_y"]) - float(layout["verso_linha_gap"]) - float(layout["verso_topicos_gap"])
+        positions["topicos"] = self._fmt_pos(x_topicos, y_topicos)
+        return positions
+
+    def _update_position_labels(self):
+        if not self._position_labels:
+            return
+        params = self._collect()
+        positions = self._compute_positions(params)
+        for key, lbl in self._position_labels.items():
+            pos_txt = positions.get(key, "Posição indisponível")
+            if not pos_txt.startswith("Posição:"):
+                pos_txt = f"Posição no PDF: {pos_txt}"
+            lbl.configure(text=pos_txt)
+
     # ──────────────────────────────────────────────────────────────────────────
     # Preview
     # ──────────────────────────────────────────────────────────────────────────
@@ -981,6 +1078,7 @@ class App(ctk.CTk):
         if self._suspend:
             return
         self._sync_cfg()
+        self._update_position_labels()
         if not self._chk_auto.get():
             return
         self._atualizar_preview()
@@ -991,6 +1089,7 @@ class App(ctk.CTk):
         if self._suspend:
             return
         self._sync_cfg()
+        self._update_position_labels()
         if not self._chk_auto.get():
             return
         self._atualizar_preview()
@@ -998,6 +1097,7 @@ class App(ctk.CTk):
     def _layout_field_changed(self, event=None):
         if self._suspend:
             return
+        self._update_position_labels()
         if self._chk_auto.get():
             self._atualizar_preview()
         self._sync_cfg()
