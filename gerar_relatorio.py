@@ -123,19 +123,6 @@ HEADER_DEFAULT_ROWS = [
 
 MAX_RECENT = 7
 
-LAYOUT_OFFSET_DEFAULTS_CM = {
-    "cover_title": 0.0,
-    "cover_table": 0.0,
-    "secao_titulo": 0.0,
-    "secao_conteudo": 0.0,
-    "horarios_titulo": 0.0,
-    "horarios_tabela": 0.0,
-    "fotos_titulo": 0.0,
-    "assinatura_titulo": 0.0,
-    "assinatura_corpo": 0.0,
-}
-LAYOUT_OFFSET_OPTIONS = [f"{v:.1f}" for v in [x * 0.5 for x in range(0, 9)]]
-
 
 # =========================
 # CONFIG
@@ -161,23 +148,12 @@ def load_config():
         "watermark_random_count": "8",
         "cover_header_scale": "1.8",
         "signature_page": True,
-        "digital_signature_enabled": False,
-        "digital_signature_path": "",
-        "company_name": "Assistência Técnica Grupo BAW",
-        "layout_offsets_cm": dict(LAYOUT_OFFSET_DEFAULTS_CM),
-        "output_mode": "unificado",
         "recent_pdfs": [],
     }
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             defaults.update(data)
-    saved_layout_offsets = defaults.get("layout_offsets_cm") or {}
-    normalized_layout_offsets = dict(LAYOUT_OFFSET_DEFAULTS_CM)
-    for key, value in saved_layout_offsets.items():
-        if key in normalized_layout_offsets:
-            normalized_layout_offsets[key] = _coerce_offset_cm(value)
-    defaults["layout_offsets_cm"] = normalized_layout_offsets
     return defaults
 
 
@@ -572,7 +548,7 @@ def _compose_horarios_table_text(rows=None):
 # =========================
 # PÁGINA DE ASSINATURA
 # =========================
-def _build_signature_page(styles, info=None, digital_signature_path="", company_name=""):
+def _build_signature_page(styles, info=None):
     """Constrói a página de assinatura do técnico e cliente."""
     info = info or {}
     tecnico = str(info.get("tecnico", "") or "").strip()
@@ -580,9 +556,6 @@ def _build_signature_page(styles, info=None, digital_signature_path="", company_
 
     story = []
     story.append(Spacer(1, 2.5 * cm))
-    if company_name:
-        story.append(Paragraph(f"<b>{company_name}</b>", styles["Body"]))
-        story.append(Spacer(1, 0.25 * cm))
     story.append(Paragraph("<b>ASSINATURA E CONFIRMAÇÃO DO ATENDIMENTO</b>", styles["Secao"]))
     story.append(Spacer(1, 0.5 * cm))
     story.append(Paragraph(
@@ -612,19 +585,10 @@ def _build_signature_page(styles, info=None, digital_signature_path="", company_
         spaceAfter=2,
     )
 
-    assinatura_tecnico = []
-    if digital_signature_path and os.path.exists(digital_signature_path):
-        try:
-            assinatura_tecnico.append(Image(digital_signature_path, width=4.2 * cm, height=1.8 * cm))
-            assinatura_tecnico.append(Spacer(1, 3))
-        except Exception:
-            assinatura_tecnico = []
-
     dados_assinatura = [
         [
             [
                 Spacer(1, 1.8 * cm),
-                *assinatura_tecnico,
                 HRFlowable(width=col_w * 0.85, thickness=1, color=colors.HexColor("#9FB3C7"), hAlign="CENTER"),
                 Spacer(1, 5),
                 Paragraph(f"<b>{tecnico or 'Técnico Responsável'}</b>", nome_style),
@@ -686,11 +650,6 @@ def gerar_pdf(
     watermark_random_count=8,
     cover_header_scale=1.8,
     include_signature_page=False,
-    layout_offsets_cm=None,
-    company_name="Assistência Técnica Grupo BAW",
-    digital_signature_enabled=False,
-    digital_signature_path="",
-    output_mode="unificado",
 ):
     import uuid
     temp_pdf = output_path + f".tmp_{uuid.uuid4().hex[:8]}.pdf"
@@ -698,10 +657,6 @@ def gerar_pdf(
     foto_cols = 1 if int(foto_cols) == 1 else 2
 
     styles = getSampleStyleSheet()
-    layout_offsets_cm = layout_offsets_cm or {}
-
-    def _layout_offset(key):
-        return _coerce_offset_cm(layout_offsets_cm.get(key, LAYOUT_OFFSET_DEFAULTS_CM.get(key, 0.0)))
 
     styles.add(ParagraphStyle(name="Titulo",
                               fontSize=18, alignment=1, spaceAfter=6,
@@ -723,9 +678,6 @@ def gerar_pdf(
         header_rows = _compose_header_rows(info, sections.get("info_extra", []))
     if header_rows:
         story.append(Spacer(1, 0.9 * cm))
-        cover_title_offset = _layout_offset("cover_title")
-        if cover_title_offset > 0:
-            story.append(Spacer(1, cover_title_offset * cm))
         story.append(Paragraph("Relatório de Atendimento Técnico", styles["CoverTitle"]))
         story.append(Spacer(1, 0.6 * cm))
         cover_scale = max(1.0, min(3.0, float(cover_header_scale or 1.8)))
@@ -771,9 +723,6 @@ def gerar_pdf(
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ]))
         story.append(Spacer(1, 0.5 * cm))
-        cover_table_offset = _layout_offset("cover_table")
-        if cover_table_offset > 0:
-            story.append(Spacer(1, cover_table_offset * cm))
         story.append(tabela)
     else:
         story.append(Spacer(1, 4.5 * cm))
@@ -788,13 +737,7 @@ def gerar_pdf(
         offset_cm = _coerce_offset_cm(section_offsets_cm.get(section_key, 0))
         if offset_cm > 0:
             story.append(Spacer(1, offset_cm * cm))
-        secao_titulo_offset = _layout_offset("secao_titulo")
-        if secao_titulo_offset > 0:
-            story.append(Spacer(1, secao_titulo_offset * cm))
         story.append(Paragraph(f"<b>{titulo}</b>", styles["Secao"]))
-        secao_conteudo_offset = _layout_offset("secao_conteudo")
-        if secao_conteudo_offset > 0:
-            story.append(Spacer(1, secao_conteudo_offset * cm))
         story.extend(processar_lista(conteudo, styles))
 
     if sections.get("descricao"):
@@ -813,14 +756,8 @@ def gerar_pdf(
     # Tabela de horários — só inclui se tiver linhas válidas
     horarios = [r for r in (horarios or []) if any(str(c).strip() for c in r)]
     if horarios:
-        horarios_titulo_offset = _layout_offset("horarios_titulo")
-        if horarios_titulo_offset > 0:
-            story.append(Spacer(1, horarios_titulo_offset * cm))
         story.append(Paragraph("<b>TABELA DE HORÁRIOS DO ATENDIMENTO</b>", styles["Secao"]))
         story.append(Spacer(1, 8))
-        horarios_tabela_offset = _layout_offset("horarios_tabela")
-        if horarios_tabela_offset > 0:
-            story.append(Spacer(1, horarios_tabela_offset * cm))
         dados_horarios = [["Data", "Início", "Fim", "Intervalos", "Descrição"], *horarios]
         tabela_horarios = Table(dados_horarios, colWidths=[3.2 * cm, 2.4 * cm, 2.4 * cm, 4.2 * cm, 3.8 * cm])
         tabela_horarios.setStyle(TableStyle([
@@ -836,9 +773,6 @@ def gerar_pdf(
         story.append(KeepTogether([tabela_horarios]))
 
     if fotos:
-        fotos_titulo_offset = _layout_offset("fotos_titulo")
-        if fotos_titulo_offset > 0:
-            story.append(Spacer(1, fotos_titulo_offset * cm))
         story.append(Paragraph("<b>ANEXOS FOTOGRÁFICOS</b>", styles["Secao"]))
         story.append(Spacer(1, 6))
 
@@ -909,17 +843,7 @@ def gerar_pdf(
     # ← NOVA: Página de assinatura
     if include_signature_page:
         story.append(PageBreak())
-        assinatura_titulo_offset = _layout_offset("assinatura_titulo")
-        if assinatura_titulo_offset > 0:
-            story.append(Spacer(1, assinatura_titulo_offset * cm))
-        story.extend(
-            _build_signature_page(
-                styles,
-                info=info,
-                digital_signature_path=digital_signature_path if digital_signature_enabled else "",
-                company_name=company_name,
-            )
-        )
+        story.extend(_build_signature_page(styles, info=info))
 
     def _draw_page_chrome(canvas_obj, page_number):
         canvas_obj.saveState()
@@ -953,7 +877,7 @@ def gerar_pdf(
                 if idx == total:
                     self.setFont("Helvetica-Bold", 11)
                     self.setFillColor(colors.HexColor("#0E2A44"))
-                    self.drawCentredString(A4[0] / 2, 2.05 * cm, company_name or "Assistência Técnica Grupo BAW")
+                    self.drawCentredString(A4[0] / 2, 2.05 * cm, "Assistência Técnica Grupo BAW")
                 super().showPage()
             super().save()
 
@@ -1029,7 +953,6 @@ def gerar_pdf(
     template_reader = PdfReader(template_path_real) if (template_path_real and os.path.exists(template_path_real)) else None
     wm_reader = PdfReader(wm_background_pdf) if (wm_background_pdf and os.path.exists(wm_background_pdf)) else None
     writer = PdfWriter()
-    final_pages = []
 
     template_base = template_reader.pages[0] if template_reader else None
     for idx, page in enumerate(content_reader.pages):
@@ -1039,31 +962,14 @@ def gerar_pdf(
             writer.add_page(wm_reader.pages[min(idx, len(wm_reader.pages) - 1)])
         else:
             writer.add_page(page)
-            final_pages.append(writer.pages[-1])
             continue
         out_page = writer.pages[-1]
         if wm_reader and template_base:
             out_page.merge_page(wm_reader.pages[min(idx, len(wm_reader.pages) - 1)])
         out_page.merge_page(page)
-        final_pages.append(out_page)
 
-    split_mode = str(output_mode or "unificado")
-    if split_mode == "separado" and len(final_pages) > 1:
-        frente_writer = PdfWriter()
-        verso_writer = PdfWriter()
-        frente_writer.add_page(final_pages[0])
-        for page in final_pages[1:]:
-            verso_writer.add_page(page)
-        base, ext = os.path.splitext(output_path)
-        frente_path = f"{base} - Frente{ext}"
-        verso_path = f"{base} - Verso{ext}"
-        with open(frente_path, "wb") as f_frente:
-            frente_writer.write(f_frente)
-        with open(verso_path, "wb") as f_verso:
-            verso_writer.write(f_verso)
-    else:
-        with open(output_path, "wb") as f:
-            writer.write(f)
+    with open(output_path, "wb") as f:
+        writer.write(f)
     if os.path.exists(temp_pdf):
         os.remove(temp_pdf)
     if wm_background_pdf and os.path.exists(wm_background_pdf):
@@ -1132,11 +1038,6 @@ class PreviewEngine:
         self._current_watermark_random_count = 8
         self._current_cover_header_scale = 1.8
         self._current_signature_page = False
-        self._current_layout_offsets_cm = {}
-        self._current_company_name = "Assistência Técnica Grupo BAW"
-        self._current_digital_signature_enabled = False
-        self._current_digital_signature_path = ""
-        self._current_output_mode = "unificado"
         self._temp_dir = tempfile.mkdtemp()
         self._running = True
 
@@ -1157,11 +1058,6 @@ class PreviewEngine:
         watermark_random_count=8,
         cover_header_scale=1.8,
         include_signature_page=False,
-        layout_offsets_cm=None,
-        company_name="Assistência Técnica Grupo BAW",
-        digital_signature_enabled=False,
-        digital_signature_path="",
-        output_mode="unificado",
     ):
         with self._lock:
             self._current_text = text
@@ -1179,11 +1075,6 @@ class PreviewEngine:
             self._current_watermark_random_count = max(1, min(60, int(watermark_random_count)))
             self._current_cover_header_scale = cover_header_scale
             self._current_signature_page = include_signature_page
-            self._current_layout_offsets_cm = layout_offsets_cm or {}
-            self._current_company_name = company_name or "Assistência Técnica Grupo BAW"
-            self._current_digital_signature_enabled = bool(digital_signature_enabled)
-            self._current_digital_signature_path = digital_signature_path or ""
-            self._current_output_mode = output_mode or "unificado"
             if self._timer is not None:
                 self._timer.cancel()
             self._timer = threading.Timer(self.debounce_ms / 1000.0, self._generate)
@@ -1209,11 +1100,6 @@ class PreviewEngine:
             watermark_random_count = self._current_watermark_random_count
             cover_header_scale = self._current_cover_header_scale
             include_signature_page = self._current_signature_page
-            layout_offsets_cm = self._current_layout_offsets_cm
-            company_name = self._current_company_name
-            digital_signature_enabled = self._current_digital_signature_enabled
-            digital_signature_path = self._current_digital_signature_path
-            output_mode = self._current_output_mode
 
         import uuid
         temp_pdf = os.path.join(self._temp_dir, f"preview_{uuid.uuid4().hex[:8]}.pdf")
@@ -1237,11 +1123,6 @@ class PreviewEngine:
                 watermark_random_count=watermark_random_count,
                 cover_header_scale=cover_header_scale,
                 include_signature_page=include_signature_page,
-                layout_offsets_cm=layout_offsets_cm,
-                company_name=company_name,
-                digital_signature_enabled=digital_signature_enabled,
-                digital_signature_path=digital_signature_path,
-                output_mode=output_mode,
             )
 
             doc = fitz.open(temp_pdf)
@@ -1719,11 +1600,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data.setdefault("image_dir", "")
         self.config_data.setdefault("default_tecnico", "")
         self.config_data.setdefault("signature_page", True)
-        self.config_data.setdefault("digital_signature_enabled", False)
-        self.config_data.setdefault("digital_signature_path", "")
-        self.config_data.setdefault("company_name", "Assistência Técnica Grupo BAW")
-        self.config_data.setdefault("output_mode", "unificado")
-        self.config_data.setdefault("layout_offsets_cm", dict(LAYOUT_OFFSET_DEFAULTS_CM))
         self.config_data.setdefault("watermark_mode", "Central")
         self.config_data.setdefault("watermark_random_count", "8")
         self.config_data.setdefault("recent_pdfs", [])
@@ -1834,63 +1710,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             command=self._on_signature_toggle,
         ).pack(side="left", padx=(12, 4))
 
-        self.output_mode_var = tk.StringVar(value=str(self.config_data.get("output_mode", "unificado")))
-        self.output_mode_split_var = tk.BooleanVar(value=self.output_mode_var.get() == "separado")
-        ctk.CTkCheckBox(
-            options,
-            text="Gerar Frente/Verso em PDFs separados",
-            variable=self.output_mode_split_var,
-            command=self._on_output_mode_toggle,
-        ).pack(side="left", padx=(10, 4))
-
-        self.digital_signature_var = tk.BooleanVar(value=bool(self.config_data.get("digital_signature_enabled", False)))
-        ctk.CTkCheckBox(
-            options,
-            text="Assinatura digital (técnico)",
-            variable=self.digital_signature_var,
-            command=self._on_digital_signature_toggle,
-        ).pack(side="left", padx=(10, 2))
-        ctk.CTkButton(options, text="Arquivo assinatura", width=130, command=self._select_digital_signature).pack(side="left", padx=2)
-
         # ── Recentes ──────────────────────────────────────────────────
         self._build_recents_bar()
-
-        settings_line = ctk.CTkFrame(self, fg_color="transparent")
-        settings_line.pack(fill="x", padx=14, pady=(0, 6))
-        ctk.CTkLabel(settings_line, text="Empresa:").pack(side="left")
-        self.company_name_var = tk.StringVar(value=str(self.config_data.get("company_name", "Assistência Técnica Grupo BAW")))
-        company_entry = ctk.CTkEntry(settings_line, textvariable=self.company_name_var, width=340)
-        company_entry.pack(side="left", padx=(4, 10))
-        company_entry.bind("<KeyRelease>", self._on_company_name_change)
-        self._digital_signature_label = ctk.CTkLabel(settings_line, text="", text_color="#7D93A8")
-        self._digital_signature_label.pack(side="left", padx=(0, 12))
-
-        layout_frame = ctk.CTkFrame(self, fg_color="transparent")
-        layout_frame.pack(fill="x", padx=14, pady=(0, 6))
-        ctk.CTkLabel(layout_frame, text="Ajustes finos de posição (cm):", text_color="#8EA1B2").pack(side="left", padx=(0, 8))
-        self.layout_offset_vars = {}
-        layout_items = [
-            ("cover_title", "Título capa"),
-            ("cover_table", "Tabela capa"),
-            ("secao_titulo", "Título tópicos"),
-            ("secao_conteudo", "Conteúdo tópicos"),
-            ("horarios_titulo", "Título horários"),
-            ("horarios_tabela", "Tabela horários"),
-            ("fotos_titulo", "Título fotos"),
-        ]
-        saved_layout = self.config_data.get("layout_offsets_cm", {}) or {}
-        for key, label in layout_items:
-            ctk.CTkLabel(layout_frame, text=f"{label}:").pack(side="left", padx=(2, 2))
-            var = tk.StringVar(value=f"{_coerce_offset_cm(saved_layout.get(key, 0.0)):.1f}")
-            self.layout_offset_vars[key] = var
-            ctk.CTkOptionMenu(
-                layout_frame,
-                variable=var,
-                values=LAYOUT_OFFSET_OPTIONS,
-                width=64,
-                command=lambda _v, k=key: self._on_layout_offset_change(k),
-            ).pack(side="left", padx=(0, 4))
-        self._update_digital_signature_label()
 
         # ── Área principal ─────────────────────────────────────────────
         self._main = ctk.CTkFrame(self, fg_color="transparent")
@@ -2126,56 +1947,8 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         if self.chk_auto_var.get():
             self.force_preview_update()
 
-    def _on_output_mode_toggle(self):
-        self.output_mode_var.set("separado" if self.output_mode_split_var.get() else "unificado")
-        self.config_data["output_mode"] = self.output_mode_var.get()
-        modo = "separado" if self.output_mode_split_var.get() else "unificado"
-        self._set_status(f"Modo de saída alterado para: {modo}.")
-        if self.chk_auto_var.get():
-            self.force_preview_update()
-
-    def _on_digital_signature_toggle(self):
-        self.config_data["digital_signature_enabled"] = bool(self.digital_signature_var.get())
-        self._update_digital_signature_label()
-        if self.chk_auto_var.get():
-            self.force_preview_update()
-
-    def _on_company_name_change(self, _event=None):
-        self.config_data["company_name"] = self.company_name_var.get().strip()
-        if self.chk_auto_var.get():
-            self.force_preview_update()
-
-    def _select_digital_signature(self):
-        file = filedialog.askopenfilename(
-            initialdir=self._pick_image_dir(),
-            filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp")],
-        )
-        if not file:
-            return
-        self.config_data["digital_signature_path"] = file
-        self._remember_image_dir(file)
-        self._update_digital_signature_label()
-        self._set_status("Arquivo de assinatura digital atualizado.")
-        if self.chk_auto_var.get():
-            self.force_preview_update()
-
-    def _update_digital_signature_label(self):
-        path = str(self.config_data.get("digital_signature_path", "")).strip()
-        if path and os.path.exists(path):
-            self._digital_signature_label.configure(text=f"Assinatura: {os.path.basename(path)}")
-        else:
-            self._digital_signature_label.configure(text="Assinatura: não definida")
-
-    def _on_layout_offset_change(self, _key):
-        self.config_data["layout_offsets_cm"] = self._get_layout_offsets_cm()
-        if self.chk_auto_var.get():
-            self.force_preview_update()
-
     def _get_section_offsets_cm(self):
         return {key: _coerce_offset_cm(var.get()) for key, var in self.section_offset_vars.items()}
-
-    def _get_layout_offsets_cm(self):
-        return {key: _coerce_offset_cm(var.get()) for key, var in self.layout_offset_vars.items()}
 
     def _get_sections_from_ui(self):
         texto = limpar_texto(self.text.get("1.0", "end").strip())
@@ -2318,11 +2091,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
             watermark_random_count=self._get_watermark_random_count(),
             cover_header_scale=float(self.cover_header_scale_var.get()),
             include_signature_page=bool(self.signature_var.get()),
-            layout_offsets_cm=self._get_layout_offsets_cm(),
-            company_name=self.company_name_var.get().strip() or "Assistência Técnica Grupo BAW",
-            digital_signature_enabled=bool(self.digital_signature_var.get()),
-            digital_signature_path=self.config_data.get("digital_signature_path", ""),
-            output_mode=self.output_mode_var.get(),
         )
 
     def _on_preview_ready(self, images, error):
@@ -2366,10 +2134,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         self.config_data["watermark_random_count"] = str(self.watermark_random_count_var.get())
         self.config_data["cover_header_scale"] = str(self.cover_header_scale_var.get())
         self.config_data["signature_page"] = bool(self.signature_var.get())
-        self.config_data["digital_signature_enabled"] = bool(self.digital_signature_var.get())
-        self.config_data["company_name"] = self.company_name_var.get().strip() or "Assistência Técnica Grupo BAW"
-        self.config_data["layout_offsets_cm"] = self._get_layout_offsets_cm()
-        self.config_data["output_mode"] = self.output_mode_var.get()
         save_config(self.config_data)
         self._engine.stop()
         self.destroy()
@@ -2609,11 +2373,6 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
                     watermark_random_count=self._get_watermark_random_count(),
                     cover_header_scale=float(self.cover_header_scale_var.get()),
                     include_signature_page=bool(self.signature_var.get()),
-                    layout_offsets_cm=self._get_layout_offsets_cm(),
-                    company_name=self.company_name_var.get().strip() or "Assistência Técnica Grupo BAW",
-                    digital_signature_enabled=bool(self.digital_signature_var.get()),
-                    digital_signature_path=self.config_data.get("digital_signature_path", ""),
-                    output_mode=self.output_mode_var.get(),
                 )
                 self.after(0, lambda: self._on_generate_success(save))
             except Exception as e:
@@ -2622,32 +2381,13 @@ class App(TkinterDnD.Tk if TkinterDnD else ctk.CTk):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_generate_success(self, path):
-        output_mode = self.output_mode_var.get()
-        if output_mode == "separado":
-            base, ext = os.path.splitext(path)
-            frente = f"{base} - Frente{ext}"
-            verso = f"{base} - Verso{ext}"
-            self._last_generated_pdf = frente if os.path.exists(frente) else path
-            if os.path.exists(frente):
-                add_recent_pdf(self.config_data, frente)
-            if os.path.exists(verso):
-                add_recent_pdf(self.config_data, verso)
-            self._set_status("PDFs gerados: Frente e Verso.")
-            success_msg = (
-                "PDFs gerados com sucesso!\n"
-                f"• {os.path.basename(frente)}\n"
-                f"• {os.path.basename(verso)}\n\n"
-                "Abrir Frente agora?"
-            )
-        else:
-            self._last_generated_pdf = path
-            add_recent_pdf(self.config_data, path)
-            self._set_status(f"PDF gerado: {os.path.basename(path)}")
-            success_msg = f"PDF gerado com sucesso!\n{os.path.basename(path)}\n\nAbrir agora?"
+        self._last_generated_pdf = path
+        add_recent_pdf(self.config_data, path)
+        self._set_status(f"PDF gerado: {os.path.basename(path)}")
         # Mostra botão "Abrir PDF" na barra superior
         self._btn_abrir_pdf.pack(side="left", padx=6)
-        if messagebox.askyesno("Sucesso", success_msg):
-            abrir_pdf(self._last_generated_pdf)
+        if messagebox.askyesno("Sucesso", f"PDF gerado com sucesso!\n{os.path.basename(path)}\n\nAbrir agora?"):
+            abrir_pdf(path)
 
     def _on_generate_error(self, err):
         self._set_status("Erro ao gerar PDF.")
