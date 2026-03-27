@@ -84,6 +84,26 @@ LAYOUT_DEFAULTS = {
     "verso_rodape_y": MARGIN + 0.8 * cm,
 }
 
+POSITIONAL_ITEMS = [
+    "aprendiz",
+    "nome_empresa",
+    "texto_corpo",
+    "nome_curso",
+    "carga_horaria",
+    "mes_ano",
+    "supervisor",
+    "supervisor_cargo",
+    "instrutor",
+    "instrutor_cargo",
+    "topicos",
+]
+
+
+def _item_offset(layout: dict, item_key: str) -> tuple[float, float]:
+    ox = float(layout.get(f"offset_{item_key}_x", 0.0))
+    oy = float(layout.get(f"offset_{item_key}_y", 0.0))
+    return ox, oy
+
 
 def load_config() -> dict:
     cfg = dict(DEFAULTS)
@@ -120,6 +140,9 @@ def _sanitize(value: str) -> str:
 def _layout_from_params(params: dict) -> dict:
     lay = dict(LAYOUT_DEFAULTS)
     lay.update(params.get("layout") or {})
+    for item in POSITIONAL_ITEMS:
+        lay.setdefault(f"offset_{item}_x", 0.0)
+        lay.setdefault(f"offset_{item}_y", 0.0)
     return lay
 
 
@@ -157,13 +180,15 @@ def _draw_frente(c: rl_canvas.Canvas, params: dict):
 
     # ── Cabeçalho: "A BAW Brasil Ind. e Com. Ltda certifica que:" ────────────
     y = float(layout["frente_header_y"])
+    ox, oy = _item_offset(layout, "nome_empresa")
     c.setFont("Helvetica", 13)
     c.setFillColor(CINZA_TEXTO)
     cabecalho = f"A {nome_empresa or 'BAW Brasil Ind. e Com. Ltda'} certifica que:"
-    c.drawCentredString(cx, y, cabecalho)
+    c.drawCentredString(cx + ox, y + oy, cabecalho)
 
     # ── Nome do aprendiz ─────────────────────────────────────────────────────
     y -= float(layout["frente_nome_gap"])
+    ox, oy = _item_offset(layout, "aprendiz")
     c.setFont("Helvetica-Bold", 38)
     c.setFillColor(AZUL_ESCURO)
     nome_display = (aprendiz or "[NOME DO PARTICIPANTE]").upper()
@@ -172,7 +197,7 @@ def _draw_frente(c: rl_canvas.Canvas, params: dict):
     while c.stringWidth(nome_display, "Helvetica-Bold", fs) > W - 4 * MARGIN and fs > 18:
         fs -= 1
     c.setFont("Helvetica-Bold", fs)
-    c.drawCentredString(cx, y, nome_display)
+    c.drawCentredString(cx + ox, y + oy, nome_display)
 
     # ── Linha separadora sob o nome ───────────────────────────────────────────
     y -= float(layout["frente_linha_gap"])
@@ -183,12 +208,14 @@ def _draw_frente(c: rl_canvas.Canvas, params: dict):
 
     # ── Texto corpo ──────────────────────────────────────────────────────────
     y -= float(layout["frente_corpo_gap"])
+    ox, oy = _item_offset(layout, "texto_corpo")
     c.setFont("Helvetica", 12)
     c.setFillColor(CINZA_SUB)
-    c.drawCentredString(cx, y, texto_corpo)
+    c.drawCentredString(cx + ox, y + oy, texto_corpo)
 
     # ── Nome do curso ────────────────────────────────────────────────────────
     if nome_curso and nome_curso.strip():
+        ox, oy = _item_offset(layout, "nome_curso")
         y -= float(layout["frente_curso_gap"])
         c.setFont("Helvetica-Bold", 14)
         c.setFillColor(AZUL_ESCURO)
@@ -206,17 +233,19 @@ def _draw_frente(c: rl_canvas.Canvas, params: dict):
             linhas.append(linha_atual)
         for ln in linhas:
             y -= float(layout["frente_curso_gap"]) * 0.9
-            c.drawCentredString(cx, y, ln)
+            c.drawCentredString(cx + ox, y + oy, ln)
 
     # ── Duração e Mês/Ano ────────────────────────────────────────────────────
     y -= float(layout["frente_duracao_gap"])
+    ox_carga, oy_carga = _item_offset(layout, "carga_horaria")
+    ox_data, oy_data = _item_offset(layout, "mes_ano")
     c.setFont("Helvetica", 11)
     c.setFillColor(CINZA_TEXTO)
     if carga:
-        c.drawCentredString(cx, y, f"Duração: {carga}")
+        c.drawCentredString(cx + ox_carga, y + oy_carga, f"Duração: {carga}")
         y -= float(layout["frente_info_gap"])
     if mes_ano:
-        c.drawCentredString(cx, y, mes_ano)
+        c.drawCentredString(cx + ox_data, y + oy_data, mes_ano)
         y -= float(layout["frente_info_gap"])
 
     # ── Assinaturas ──────────────────────────────────────────────────────────
@@ -230,6 +259,12 @@ def _draw_frente(c: rl_canvas.Canvas, params: dict):
         (x_left,  supervisor, sup_cargo, params.get("assinatura_supervisor_path", ""), params.get("usar_assinatura_supervisor", False)),
         (x_right, instrutor,  inst_cargo, params.get("assinatura_instrutor_path", ""), params.get("usar_assinatura_instrutor", False)),
     ]:
+        if x_col == x_left:
+            ox_nome, oy_nome = _item_offset(layout, "supervisor")
+            ox_cargo, oy_cargo = _item_offset(layout, "supervisor_cargo")
+        else:
+            ox_nome, oy_nome = _item_offset(layout, "instrutor")
+            ox_cargo, oy_cargo = _item_offset(layout, "instrutor_cargo")
         if usar_assinatura:
             _draw_signature_image(c, assinatura, x_col, y_assin)
         # Linha de assinatura
@@ -239,10 +274,10 @@ def _draw_frente(c: rl_canvas.Canvas, params: dict):
                x_col + col_w * 0.5, y_assin + 0.5 * cm)
         c.setFont("Helvetica-Bold", 11)
         c.setFillColor(AZUL_ESCURO)
-        c.drawCentredString(x_col, y_assin + 0.15 * cm, nome_sig or "")
+        c.drawCentredString(x_col + ox_nome, y_assin + 0.15 * cm + oy_nome, nome_sig or "")
         c.setFont("Helvetica", 10)
         c.setFillColor(CINZA_SUB)
-        c.drawCentredString(x_col, y_assin - 0.35 * cm, cargo_sig or "")
+        c.drawCentredString(x_col + ox_cargo, y_assin - 0.35 * cm + oy_cargo, cargo_sig or "")
 
 
 def _draw_verso(c: rl_canvas.Canvas, params: dict):
@@ -275,6 +310,7 @@ def _draw_verso(c: rl_canvas.Canvas, params: dict):
 
     linhas = [l.strip() for l in (topicos or "").strip().splitlines() if l.strip()]
     x_txt  = float(layout["verso_topicos_x"])
+    ox_top, oy_top = _item_offset(layout, "topicos")
     line_h = float(layout["verso_topicos_line_h"])
 
     for ln in linhas:
@@ -285,11 +321,11 @@ def _draw_verso(c: rl_canvas.Canvas, params: dict):
             c.setFont("Helvetica", 10)
             c.setFillColor(CINZA_SUB)
             bullet = "▸"
-            c.drawString(x_txt + 0.6 * cm, y, f"{bullet} {ln.lstrip('-–• ')}")
+            c.drawString(x_txt + 0.6 * cm + ox_top, y + oy_top, f"{bullet} {ln.lstrip('-–• ')}")
         else:
             c.setFont("Helvetica-Bold", 11)
             c.setFillColor(AZUL_ESCURO)
-            c.drawString(x_txt, y, f"▶  {ln}")
+            c.drawString(x_txt + ox_top, y + oy_top, f"▶  {ln}")
             c.setFont("Helvetica", 11)
             c.setFillColor(CINZA_TEXTO)
         y -= line_h
@@ -560,7 +596,7 @@ class App(ctk.CTk):
         self._lista_nomes: list[str] = []
         self._last_pdf = ""
         self._suspend  = False
-        self._position_labels = {}
+        self._position_controls = {}
 
         self._build_ui()
         self._load_ui()
@@ -657,7 +693,7 @@ class App(ctk.CTk):
                                            placeholder_text="Nome do participante")
         self._ent_aprendiz.pack(fill="x", padx=8, pady=(0, 4))
         self._ent_aprendiz.bind("<KeyRelease>", self._field_changed)
-        self._position_labels["aprendiz"] = self._create_position_label(left)
+        self._create_position_editor(left, "aprendiz")
 
         # Lista
         self._lbl_lista = ctk.CTkLabel(left, text="Lista: não carregada",
@@ -679,14 +715,14 @@ class App(ctk.CTk):
         self._ent_empresa = ctk.CTkEntry(left)
         self._ent_empresa.pack(fill="x", padx=8, pady=(0, 2))
         self._ent_empresa.bind("<KeyRelease>", self._field_changed)
-        self._position_labels["nome_empresa"] = self._create_position_label(left)
+        self._create_position_editor(left, "nome_empresa")
 
         ctk.CTkLabel(left, text="Texto intro (ex: 'concluiu satisfatoriamente o:'):",
                      text_color="#8AAAC8", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=8, pady=(6,1))
         self._ent_corpo = ctk.CTkEntry(left)
         self._ent_corpo.pack(fill="x", padx=8, pady=(0, 2))
         self._ent_corpo.bind("<KeyRelease>", self._field_changed)
-        self._position_labels["texto_corpo"] = self._create_position_label(left)
+        self._create_position_editor(left, "texto_corpo")
 
         ctk.CTkLabel(left, text="Nome do curso/treinamento:",
                      text_color="#8AAAC8", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=8, pady=(4,1))
@@ -695,25 +731,25 @@ class App(ctk.CTk):
                                           wrap="word")
         self._ent_curso.pack(fill="x", padx=8, pady=(0, 2))
         self._ent_curso.bind("<<Modified>>", self._textbox_changed)
-        self._position_labels["nome_curso"] = self._create_position_label(left)
+        self._create_position_editor(left, "nome_curso")
 
         # Informações
         sec("INFORMAÇÕES DO CERTIFICADO  (salvas automaticamente)")
         self._ent_carga   = entry(left, "Carga horária:",    "Ex: 4 horas")
-        self._position_labels["carga_horaria"] = self._create_position_label(left)
+        self._create_position_editor(left, "carga_horaria")
         self._ent_mes_ano = entry(left, "Mês / Ano:",        "Ex: Março, 2025")
-        self._position_labels["mes_ano"] = self._create_position_label(left)
+        self._create_position_editor(left, "mes_ano")
 
         # Assinaturas
         sec("ASSINATURAS")
         self._ent_supervisor      = entry(left, "Supervisor — Nome:",  "Ex: Renato Castelan")
-        self._position_labels["supervisor"] = self._create_position_label(left)
+        self._create_position_editor(left, "supervisor")
         self._ent_supervisor_cargo = entry(left, "Supervisor — Cargo:", "Supervisor técnico")
-        self._position_labels["supervisor_cargo"] = self._create_position_label(left)
+        self._create_position_editor(left, "supervisor_cargo")
         self._ent_instrutor        = entry(left, "Instrutor — Nome:",   "Ex: Marco Silva")
-        self._position_labels["instrutor"] = self._create_position_label(left)
+        self._create_position_editor(left, "instrutor")
         self._ent_instrutor_cargo  = entry(left, "Instrutor — Cargo:",  "Instrutor técnico")
-        self._position_labels["instrutor_cargo"] = self._create_position_label(left)
+        self._create_position_editor(left, "instrutor_cargo")
         self._chk_assin_sup = tk.BooleanVar(value=False)
         self._chk_assin_inst = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(left, text="Usar assinatura digital do supervisor",
@@ -733,7 +769,7 @@ class App(ctk.CTk):
                                             wrap="word")
         self._txt_topicos.pack(fill="x", padx=8, pady=(4, 8))
         self._txt_topicos.bind("<<Modified>>", self._textbox_changed)
-        self._position_labels["topicos"] = self._create_position_label(left)
+        self._create_position_editor(left, "topicos")
 
         sec("POSIÇÃO DOS ELEMENTOS (lembra automaticamente)")
         self._layout_vars = {}
@@ -892,6 +928,9 @@ class App(ctk.CTk):
         lay = _layout_from_params({"layout": self.cfg.get("layout", {})})
         for k, v in self._layout_vars.items():
             v.set(f"{float(lay.get(k, LAYOUT_DEFAULTS.get(k, 0.0))):.2f}")
+        for item, controls in self._position_controls.items():
+            controls["x_var"].set(f"{float(lay.get(f'offset_{item}_x', 0.0)):.2f}")
+            controls["y_var"].set(f"{float(lay.get(f'offset_{item}_y', 0.0)):.2f}")
 
         lista_path = self.cfg.get("lista_nomes_path", "")
         if lista_path and os.path.exists(lista_path):
@@ -985,17 +1024,41 @@ class App(ctk.CTk):
                 lay[k] = float(txt)
             except ValueError:
                 continue
+        for item, controls in self._position_controls.items():
+            for axis in ("x", "y"):
+                txt = (controls[f"{axis}_var"].get() or "").strip().replace(",", ".")
+                if not txt:
+                    continue
+                try:
+                    lay[f"offset_{item}_{axis}"] = float(txt)
+                except ValueError:
+                    continue
         return lay
 
-    def _create_position_label(self, parent):
+    def _create_position_editor(self, parent, item_key):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=8, pady=(0, 4))
+
         lbl = ctk.CTkLabel(
-            parent,
+            row,
             text="Posição: aguardando dados",
             text_color="#5B7A9D",
             font=ctk.CTkFont(size=10),
         )
-        lbl.pack(anchor="w", padx=8, pady=(0, 4))
-        return lbl
+        lbl.pack(side="left")
+
+        x_var = tk.StringVar()
+        y_var = tk.StringVar()
+        ctk.CTkLabel(row, text="  ΔX", text_color="#8AAAC8", font=ctk.CTkFont(size=10)).pack(side="left")
+        ent_x = ctk.CTkEntry(row, width=58, textvariable=x_var, placeholder_text="0")
+        ent_x.pack(side="left", padx=(2, 4))
+        ctk.CTkLabel(row, text="ΔY", text_color="#8AAAC8", font=ctk.CTkFont(size=10)).pack(side="left")
+        ent_y = ctk.CTkEntry(row, width=58, textvariable=y_var, placeholder_text="0")
+        ent_y.pack(side="left", padx=(2, 0))
+        ent_x.bind("<KeyRelease>", self._layout_field_changed)
+        ent_y.bind("<KeyRelease>", self._layout_field_changed)
+
+        self._position_controls[item_key] = {"label": lbl, "x_var": x_var, "y_var": y_var}
 
     def _fmt_pos(self, x, y):
         return f"x={float(x):.1f} pt · y={float(y):.1f} pt"
@@ -1006,18 +1069,21 @@ class App(ctk.CTk):
 
         positions = {}
         y = float(layout["frente_header_y"])
-        positions["nome_empresa"] = self._fmt_pos(cx, y)
+        ox, oy = _item_offset(layout, "nome_empresa")
+        positions["nome_empresa"] = self._fmt_pos(cx + ox, y + oy)
 
         y -= float(layout["frente_nome_gap"])
         nome_display = (params.get("aprendiz", "") or "[NOME DO PARTICIPANTE]").upper()
         fs = 38
         while pdfmetrics.stringWidth(nome_display, "Helvetica-Bold", fs) > W - 4 * MARGIN and fs > 18:
             fs -= 1
-        positions["aprendiz"] = self._fmt_pos(cx, y)
+        ox, oy = _item_offset(layout, "aprendiz")
+        positions["aprendiz"] = self._fmt_pos(cx + ox, y + oy)
 
         y -= float(layout["frente_linha_gap"])
         y -= float(layout["frente_corpo_gap"])
-        positions["texto_corpo"] = self._fmt_pos(cx, y)
+        ox, oy = _item_offset(layout, "texto_corpo")
+        positions["texto_corpo"] = self._fmt_pos(cx + ox, y + oy)
 
         nome_curso = (params.get("nome_curso") or "").strip()
         if nome_curso:
@@ -1035,37 +1101,46 @@ class App(ctk.CTk):
                 linhas.append(linha_atual)
             for _ in linhas:
                 y -= float(layout["frente_curso_gap"]) * 0.9
-            positions["nome_curso"] = self._fmt_pos(cx, y)
+            ox, oy = _item_offset(layout, "nome_curso")
+            positions["nome_curso"] = self._fmt_pos(cx + ox, y + oy)
         else:
             positions["nome_curso"] = "Posição: sem conteúdo para calcular"
 
         y -= float(layout["frente_duracao_gap"])
-        positions["carga_horaria"] = self._fmt_pos(cx, y)
+        ox, oy = _item_offset(layout, "carga_horaria")
+        positions["carga_horaria"] = self._fmt_pos(cx + ox, y + oy)
         if params.get("carga_horaria", "").strip():
             y -= float(layout["frente_info_gap"])
-        positions["mes_ano"] = self._fmt_pos(cx, y)
+        ox, oy = _item_offset(layout, "mes_ano")
+        positions["mes_ano"] = self._fmt_pos(cx + ox, y + oy)
 
         y_assin = float(layout["frente_assin_y"]) + 0.15 * cm
         x_off = float(layout["frente_assin_x_offset"])
         col_w = (W - 2 * MARGIN) * 0.28
         x_left = MARGIN + col_w * 0.5 + x_off
         x_right = W - MARGIN - col_w * 0.5 + x_off
-        positions["supervisor"] = self._fmt_pos(x_left, y_assin)
-        positions["supervisor_cargo"] = self._fmt_pos(x_left, y_assin - 0.5 * cm)
-        positions["instrutor"] = self._fmt_pos(x_right, y_assin)
-        positions["instrutor_cargo"] = self._fmt_pos(x_right, y_assin - 0.5 * cm)
+        ox, oy = _item_offset(layout, "supervisor")
+        positions["supervisor"] = self._fmt_pos(x_left + ox, y_assin + oy)
+        ox, oy = _item_offset(layout, "supervisor_cargo")
+        positions["supervisor_cargo"] = self._fmt_pos(x_left + ox, y_assin - 0.5 * cm + oy)
+        ox, oy = _item_offset(layout, "instrutor")
+        positions["instrutor"] = self._fmt_pos(x_right + ox, y_assin + oy)
+        ox, oy = _item_offset(layout, "instrutor_cargo")
+        positions["instrutor_cargo"] = self._fmt_pos(x_right + ox, y_assin - 0.5 * cm + oy)
 
         x_topicos = float(layout["verso_topicos_x"])
         y_topicos = float(layout["verso_titulo_y"]) - float(layout["verso_linha_gap"]) - float(layout["verso_topicos_gap"])
-        positions["topicos"] = self._fmt_pos(x_topicos, y_topicos)
+        ox, oy = _item_offset(layout, "topicos")
+        positions["topicos"] = self._fmt_pos(x_topicos + ox, y_topicos + oy)
         return positions
 
     def _update_position_labels(self):
-        if not self._position_labels:
+        if not self._position_controls:
             return
         params = self._collect()
         positions = self._compute_positions(params)
-        for key, lbl in self._position_labels.items():
+        for key, controls in self._position_controls.items():
+            lbl = controls["label"]
             pos_txt = positions.get(key, "Posição indisponível")
             if not pos_txt.startswith("Posição:"):
                 pos_txt = f"Posição no PDF: {pos_txt}"
